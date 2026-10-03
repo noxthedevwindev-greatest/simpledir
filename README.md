@@ -56,28 +56,48 @@ a replacement for it. the difference is what each one optimizes for:
 | startup cost | shell hook + db queries | one `cat` |
 | config you can read and hand-edit | no | yes |
 | moving a dir | move it, forget the alias | `simpledir add -f name /new/path` |
+| installing it | a package manager | `curl … \| bash` |
 
-**use zoxide** if you wander. if you `cd` to the same dozen places every day and
-want them to have names, this is less machinery for the same result.
+**use zoxide** if you wander — frecency scoring is genuinely good and
+reimplementing it would double this tool's size and add a database to a project
+whose whole pitch is "no database".
 
-**use both.** they don't conflict — different prefixes.
+**use simpledir** if you `cd` to the same dozen places every day and want them
+to have names. it's also the thing you reach for when you *know* the name and
+zoxide would make you guess a substring of it.
+
+**use both.** they don't conflict — different prefixes, and they can even share
+a name because each keeps its own state.
 
 ## install
+
+one command. it checks for python, installs it with **yay** (then pacman, then
+mise) if it's missing, drops the tool in `~/.local/bin`, and wires your shell rc:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/main/install.sh | bash
+```
+
+prefer to look before you pipe? that's the right instinct:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/main/install.sh -o install.sh
+less install.sh && bash install.sh
+```
+
+`bash install.sh --uninstall` removes the binary and the rc block (your aliases
+in `~/.simpledir/config.json` stay). installer knobs: `SIMPLEDIR_BIN_DIR`,
+`SIMPLEDIR_RC`, `SIMPLEDIR_PM`, `SIMPLEDIR_NO_RC=1`.
+
+by hand, if you'd rather:
 
 ```bash
 git clone https://github.com/noxthedevwindev-greatest/simpledir
 cd simpledir && make install
 ```
 
-`make install` drops the binary in `~/.local/bin` and appends a guarded block to
-your `~/.bashrc`. prefer to do it by hand:
-
-```bash
-install -Dm755 simpledir ~/.local/bin/simpledir
-simpledir init >> ~/.bashrc      # or ~/.zshrc
-```
-
-no package manager, no dependencies, python 3.8+. not in the AUR yet — PR welcome.
+no package manager, no dependencies, python 3.8+. a PKGBUILD is in
+`packaging/`; the AUR package isn't claimed yet — PR welcome.
 
 ## usage
 
@@ -85,11 +105,14 @@ no package manager, no dependencies, python 3.8+. not in the AUR yet — PR welc
 simpledir add [<name>] [<path>]  # bind a name. name defaults to the dir's own name, path to $PWD
 simpledir rm <name>              # unbind
 simpledir rename <old> <new>     # rename, keep the path
+simpledir import <dir>           # bind every subdirectory of a tree at once
 simpledir ls [<query>] [-l]      # list, optionally filtered by name or path substring
 simpledir ls --names             # one alias per line (for completion scripts)
 simpledir ls --json              # same shape as the config file, for scripts and agents
 simpledir jump <alias[/sub]>     # print the path, don't cd
 simpledir edit                   # open the config in $EDITOR
+simpledir update                 # check for a newer release, install it if you want
+simpledir doctor                 # check your install: dead aliases, rc wiring, PATH
 simpledir completions bash|zsh   # print a completion script
 simpledir init                   # print the shell wrapper
 ```
@@ -99,9 +122,17 @@ and in your shell, `sd` / `simpledir` with no subcommand:
 ```bash
 sd dots        # cd to the bound dir
 sd dots/nix    # cd into a subdirectory of it
+sd /some/path  # or just a path, why not
 sd             # -> $HOME
 sd -           # -> previous dir
 simpledir dots # identical to `sd dots`
+```
+
+bulk binding, for when you have a whole directory of projects:
+
+```bash
+$ simpledir import ~/Projects
+bound 12: dotfiles hyprland nixdots projects simpledir ...
 ```
 
 typo suggestions, because `sd dotfile` shouldn't just fail:
@@ -112,6 +143,51 @@ simpledir: no alias named 'dotfile'
   did you mean: dotfiles
   see them all: simpledir ls
 ```
+
+## staying up to date
+
+```bash
+simpledir update              # check, then ask before installing
+simpledir update --check      # just tell me. exit 1 means an update exists (CI-friendly)
+simpledir update --yes        # don't ask
+```
+
+`update` downloads the release asset, checks that it's actually simpledir and
+actually newer, then replaces your binary atomically. it won't overwrite a
+working install with a same-version or garbage download.
+
+it also checks on its own, at most **once a day**, and only when you're sitting
+at a terminal — never on the jump path, never in a script, never if stderr isn't
+a tty. all it does is print one line:
+
+```
+simpledir: v3.1.0 is out (you're on v3.0.0). `simpledir update` installs it.
+```
+
+opt out entirely with `SIMPLEDIR_NO_UPDATE_CHECK=1`.
+
+## what's new in 3.0
+
+**one-command install.** `curl … | bash`. it finds python, or installs it with
+yay / pacman / mise, then installs the tool and patches your rc. no clone, no
+package manager, no `make`. `--uninstall` reverses it.
+
+**`simpledir update`.** checks GitHub for a newer release, shows you what it
+found, and asks before installing. the download is verified (is it really
+simpledir? is it really newer?) and swapped in atomically, so a failed update
+can't leave you with a broken binary. there's a quiet once-a-day nudge too, off
+in scripts and disableable.
+
+**`simpledir import`.** `simpledir import ~/Projects` binds every project
+directory at once. `--depth`, `--prefix`, `--hidden`, `--dry-run`, `--force`.
+the "i have twelve directories and don't want to type it twelve times" command.
+
+**`simpledir doctor`.** points at what's actually wrong: aliases whose directory
+is gone (with the rebind command), names with spaces, a missing shell wrapper, a
+`~/.local/bin` that isn't in your PATH. exits non-zero if something needs you.
+
+**release assets.** every release ships `simpledir` and `install.sh` as
+downloadable assets, which is what `update` and the curl installer fetch.
 
 ## what's new in 2.0
 
@@ -207,8 +283,10 @@ back it up if you want:
 ## development
 
 ```bash
-make test                      # 77 assertions, real bash subprocesses
+make test                      # 143 assertions, real bash subprocesses
 vhs docs/demo.tape             # re-record the gif above
+make assets                    # build dist/ for a release
+make release                   # tag, push, publish with assets attached
 ```
 
 working on it with an AI agent? [`AGENTS.md`](AGENTS.md) has the ground rules

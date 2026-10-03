@@ -3,3 +3,6 @@ __pycache__/
 *.gif
 !docs/demo.gif
 .DS_Store
+
+# release staging: `make assets` fills this, the release uploads from here
+dist/

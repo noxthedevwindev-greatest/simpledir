@@ -12,19 +12,32 @@ import argparse
 import difflib
 import json
 import os
+import re
 import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
+import time
+import urllib.request
 from pathlib import Path
 
 CONFIG_DIR = Path(os.environ.get("SIMPLEDIR_CONFIG_DIR", Path.home() / ".simpledir"))
 CONFIG_FILE = CONFIG_DIR / "config.json"
-VERSION = "2.0.0"
+UPDATE_CACHE = CONFIG_DIR / "update-check.json"
+VERSION = "3.0.0"
 PROG = "simpledir"
 
+REPO = "noxthedevwindev-greatest/simpledir"
+RELEASE_API = f"https://api.github.com/repos/{REPO}/releases/latest"
+RELEASE_ASSET = f"https://github.com/{REPO}/releases/latest/download/simpledir"
+
 BANNER = f"{PROG} {VERSION} - the next zoxide"
-COMMANDS = ("add", "rm", "rename", "ls", "jump", "edit", "completions", "init")
+COMMANDS = (
+    "add", "rm", "rename", "ls", "jump", "edit",
+    "import", "update", "doctor", "completions", "init",
+)
+CHECK_INTERVAL = 86400  # at most one network round trip per day
 
 
 class UserError(Exception):
@@ -130,6 +143,95 @@ def die(msg: str) -> "NoReturn":  # noqa: F821
     raise SystemExit(1)
 
 
+# ------------------------------------------------------------------- updates
+
+
+def parse_version(text: str) -> tuple:
+    parts = tuple(int(n) for n in re.findall(r"\d+", str(text))[:3])
+    return parts or (0,)
+
+
+def is_newer(candidate: str, current: str = VERSION) -> bool:
+    return parse_version(candidate) > parse_version(current)
+
+
+def _fetch(url: str, timeout: float) -> bytes:
+    request = urllib.request.Request(
+        url, headers={"User-Agent": f"{PROG}/{VERSION}", "Accept": "application/vnd.github+json"}
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read()
+
+
+def latest_release(timeout: float = 4.0) -> str | None:
+    """Newest published version as a plain 'x.y.z'. None if we can't tell.
+
+    Never raises: an update check is not worth breaking somebody's `cd` over.
+    """
+    url = os.environ.get("SIMPLEDIR_UPDATE_URL", RELEASE_API)
+    try:
+        payload = json.loads(_fetch(url, timeout))
+        tag = str(payload.get("tag_name") or "")
+    except Exception:
+        return None
+    return tag.lstrip("v") or None
+
+
+def read_cache() -> dict:
+    try:
+        data = json.loads(UPDATE_CACHE.read_text())
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_cache(latest: str | None) -> None:
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        UPDATE_CACHE.write_text(json.dumps({"checked": int(time.time()), "latest": latest}))
+    except OSError:
+        pass  # a read-only home shouldn't break `ls`
+
+
+def install_target() -> Path:
+    """Where `update` should put the new version."""
+    override = os.environ.get("SIMPLEDIR_BIN")
+    if override:
+        return Path(override)
+    standard = Path.home() / ".local/bin/simpledir"
+    if standard.exists():
+        return standard  # what install.sh made; don't scribble in a git checkout
+    running = Path(sys.argv[0]).resolve()
+    if running.is_file() and os.access(running, os.W_OK):
+        return running
+    return standard
+
+
+def nudge() -> None:
+    """One stderr line if a newer release exists. At most one check a day.
+
+    Skipped when stderr isn't a terminal, so scripts and pipes stay silent.
+    """
+    if os.environ.get("SIMPLEDIR_NO_UPDATE_CHECK") or not sys.stderr.isatty():
+        return
+
+    cache = read_cache()
+    now = int(time.time())
+    latest = cache.get("latest")
+    if not latest or now - int(cache.get("checked", 0) or 0) > CHECK_INTERVAL:
+        latest = latest_release()
+        if latest:
+            write_cache(latest)
+        else:
+            return  # offline, rate limited, api changed: say nothing, ever
+
+    if latest and is_newer(latest):
+        print(
+            f"{PROG}: v{latest} is out (you're on v{VERSION}). `{PROG} update` installs it.",
+            file=sys.stderr,
+        )
+
+
 # -------------------------------------------------------------------------- commands
 
 
@@ -157,6 +259,7 @@ def cmd_add(args: argparse.Namespace) -> int:
     print(f"{name} -> {target}")
     if derived and name != derived:
         print(f"  rename it: {PROG} rename {name} <other-name>")
+    nudge()
     return 0
 
 
@@ -230,6 +333,7 @@ def cmd_ls(args: argparse.Namespace) -> int:
                 if not relative.startswith(".."):
                     shown = relative
         print(f"{name.ljust(width)}  {shown}{gone}")
+    nudge()
     return 0
 
 
@@ -249,6 +353,189 @@ def cmd_edit(args: argparse.Namespace) -> int:
 def cmd_jump(args: argparse.Namespace) -> int:
     aliases = load()["aliases"]
     print(resolve(args.name, aliases))
+    return 0
+
+
+def cmd_import(args: argparse.Namespace) -> int:
+    """Bind every subdirectory of a tree in one shot.
+
+    The 'I have twelve projects and don't want to type this twelve times'
+    command. Depth-limited and it skips anything already bound.
+    """
+    root = normalize(args.directory)
+    if not os.path.isdir(root):
+        die(f"not a directory: {root}")
+
+    found: list[tuple] = []
+    for dirpath, dirnames, _ in os.walk(root):
+        relative = os.path.relpath(dirpath, root)
+        depth = 0 if relative == "." else relative.count(os.sep) + 1
+        if depth >= args.depth:
+            dirnames[:] = []  # don't descend any further
+        if not args.hidden:
+            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        if relative == ".":
+            continue
+        found.append((args.prefix + os.path.basename(dirpath), dirpath))
+
+    if not found:
+        die(f"nothing to import under {root} at depth {args.depth}")
+
+    data = load()
+    aliases = data["aliases"]
+    bound, skipped = [], []
+    for name, target in sorted(found):
+        if name in aliases and not args.force:
+            skipped.append(name)
+            continue
+        aliases[name] = normalize(target)
+        bound.append(name)
+
+    if bound and not args.dry_run:
+        save(data)
+
+    verb = "would bind" if args.dry_run else "bound"
+    print(f"{verb} {len(bound)}: " + " ".join(bound))
+    if skipped:
+        print(f"skipped {len(skipped)} already bound: " + " ".join(skipped))
+        if not args.force:
+            print(f"  overwrite them: {PROG} import --force {args.directory}")
+    return 0
+
+
+def cmd_update(args: argparse.Namespace) -> int:
+    latest = latest_release(timeout=15)
+    if not latest:
+        die(f"couldn't reach GitHub to check for updates. try again, or see {REPO}")
+
+    print(f"{PROG} {VERSION} installed, newest release is v{latest}")
+    if not is_newer(latest):
+        write_cache(latest)
+        print("you're up to date")
+        return 0
+
+    target = install_target()
+    if args.check:
+        print(f"update available: v{latest} (exit 1 means 'there is one')")
+        return 1
+
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print(f"  not a terminal, so not asking. install it with: {PROG} update --yes")
+            return 1
+        answer = input(f"  install v{latest} over {target}? [y/N] ").strip().lower()
+        if answer not in ("y", "yes"):
+            print("  ok, leaving it alone")
+            return 0
+
+    url = os.environ.get("SIMPLEDIR_UPDATE_ASSET_URL", RELEASE_ASSET)
+    try:
+        blob = _fetch(url, 30)
+    except Exception as exc:
+        die(f"download failed: {exc}")
+
+    # verify what we downloaded before it replaces a working install
+    with tempfile.TemporaryDirectory() as scratch:
+        probe = Path(scratch) / "candidate"
+        probe.write_bytes(blob)
+        probe.chmod(0o755)
+        try:
+            reported = subprocess.run(
+                [str(probe), "--version"], capture_output=True, text=True, timeout=20
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError) as exc:
+            die(f"downloaded file isn't runnable: {exc}")
+        if not reported.startswith(f"{PROG} "):
+            die(f"downloaded file isn't {PROG}: {reported or '<no output>'}")
+        new_version = reported.split()[1].lstrip("v")
+
+    if not is_newer(new_version, VERSION):
+        print(f"  asset is v{new_version}, same as what you have. not changing anything")
+        write_cache(new_version)
+        return 0
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staged = target.with_name(target.name + f".new.{os.getpid()}")
+    staged.write_bytes(blob)
+    staged.chmod(0o755)
+    os.replace(staged, target)  # atomic: never a half-written binary in your PATH
+    write_cache(new_version)
+    print(f"updated to v{new_version} at {target}")
+    print(f"  new shell needed if {PROG} init gained subcommands")
+    return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    problems = 0
+
+    def ok(msg: str) -> None:
+        print(f"  \033[32mok\033[0m    {msg}")
+
+    def bad(msg: str) -> None:
+        nonlocal problems
+        problems += 1
+        print(f"  \033[31mproblem\033[0m {msg}")
+
+    def note(msg: str) -> None:
+        print(f"  \033[2mnote\033[0m    {msg}")
+
+    print(f"{PROG} doctor - version {VERSION}")
+    print("runtime")
+    ok(f"python {sys.version.split()[0]}")
+
+    print("config")
+    if CONFIG_FILE.exists():
+        ok(f"{CONFIG_FILE}")
+        try:
+            aliases = load()["aliases"]
+        except UserError as exc:
+            bad(str(exc).splitlines()[0])
+            aliases = {}
+        else:
+            ok(f"{len(aliases)} alias{'es' if len(aliases) != 1 else ''}")
+            for name, target, missing in rows(aliases):
+                if missing:
+                    bad(f"'{name}' -> {target} is gone. rebind: {PROG} add --force {name} <path>")
+                if name != name.strip() or name.startswith("-") or " " in name:
+                    bad(f"alias name {name!r} has whitespace or a leading dash")
+    else:
+        bad(f"no config yet at {CONFIG_FILE}. create one: {PROG} add")
+
+    print("shell")
+    wired = []
+    for rc in (Path.home() / ".bashrc", Path.home() / ".zshrc", Path.home() / ".config/fish/config.fish"):
+        try:
+            if rc.exists() and "# >>> simpledir >>>" in rc.read_text(errors="replace"):
+                wired.append(str(rc))
+        except OSError:
+            pass
+    if wired:
+        for rc in wired:
+            ok(f"wrapper wired into {rc}")
+    else:
+        target_rc = "~/.zshrc" if "zsh" in os.environ.get("SHELL", "") else "~/.bashrc"
+        bad(f"no shell wrapper found. add it: {PROG} init >> {target_rc}")
+
+    binary_dir = str(install_target().parent)
+    if binary_dir in os.environ.get("PATH", "").split(os.pathsep):
+        ok(f"{binary_dir} is in PATH")
+    else:
+        bad(f"{binary_dir} is not in PATH. add: export PATH=\"{binary_dir}:$PATH\"")
+
+    cached = read_cache().get("latest")
+    print("updates")
+    if cached:
+        ok(f"last known release: v{cached}")
+    else:
+        note(f"never checked. run `{PROG} update --check`")
+    if os.environ.get("SIMPLEDIR_NO_UPDATE_CHECK"):
+        note("update checks are disabled (SIMPLEDIR_NO_UPDATE_CHECK)")
+
+    print()
+    if problems:
+        print(f"{problems} problem{'s' if problems != 1 else ''} found")
+        return 1
+    print("everything looks fine")
     return 0
 
 
@@ -369,6 +656,23 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("edit", help="open the config in $EDITOR")
     p.add_argument("editor", nargs="?", help="editor command; defaults to $EDITOR")
     p.set_defaults(func=cmd_edit)
+
+    p = sub.add_parser("import", help="bind every subdirectory of a tree in one shot")
+    p.add_argument("directory", help="tree to walk, e.g. ~/Projects")
+    p.add_argument("-d", "--depth", type=int, default=1, help="how many levels to bind (default 1)")
+    p.add_argument("-p", "--prefix", default="", help="namespace the names, e.g. `proj-`")
+    p.add_argument("-f", "--force", action="store_true", help="overwrite existing aliases")
+    p.add_argument("--hidden", action="store_true", help="include dot-directories")
+    p.add_argument("-n", "--dry-run", action="store_true", help="show what would happen, change nothing")
+    p.set_defaults(func=cmd_import)
+
+    p = sub.add_parser("update", help="check for a newer release and install it")
+    p.add_argument("--check", action="store_true", help="only report; exit 1 if an update exists")
+    p.add_argument("-y", "--yes", action="store_true", help="don't ask, just install")
+    p.set_defaults(func=cmd_update)
+
+    p = sub.add_parser("doctor", help="check the install: config, dead aliases, shell wiring, PATH")
+    p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("completions", help="print a shell completion script")
     p.add_argument("shell", choices=("bash", "zsh"))

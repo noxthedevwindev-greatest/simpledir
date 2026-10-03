@@ -19,31 +19,34 @@ Complements, does not replace, [zoxide](https://github.com/ajeetdsouza/zoxide).
 ## Install
 
 ```
-git clone https://github.com/noxthedevwindev-greatest/simpledir
-cd simpledir && make install
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/main/install.sh | bash
 ```
 
-Or manually:
+The installer checks for Python 3.8+, installs it with yay, pacman or mise (in
+that order) if missing, downloads the `simpledir` release asset into
+`~/.local/bin`, and appends a guarded wrapper block to `~/.bashrc` or `~/.zshrc`
+(chosen from `$SHELL`). Re-running it refreshes the block and keeps a backup.
+`bash install.sh --uninstall` reverses all of it.
 
-```
-install -Dm755 simpledir ~/.local/bin/simpledir
-simpledir init >> ~/.bashrc
-```
+From source: `git clone … && make install`.
 
 ## Commands
 
 ```
-simpledir add [<name>] [<path>]   bind an alias; name defaults to the directory's basename, path to $PWD; -f overwrites
-simpledir rm <name>               remove an alias
-simpledir rename <old> <new>      change an alias's name, keeping its path; -f overwrites
-simpledir ls [<query>] [-l]       list aliases; <query> filters on name or path substring; -l forces absolute paths
-simpledir ls --names              one alias per line, no padding, for completion scripts
-simpledir ls --json               JSON object of the same shape as the config file
-simpledir jump <alias[/sub]>      print the bound path to stdout, do not cd
-simpledir edit [<editor>]         open the config in $EDITOR (default), creating an empty one if absent
-simpledir completions bash|zsh    print a shell completion script
-simpledir init                    print the shell wrapper to append to a shell rc file
-simpledir <alias>                 in a shell: jump. elsewhere: same as `jump`
+simpledir add [<name>] [<path>]  bind an alias; name defaults to the directory's basename, path to $PWD; -f overwrites
+simpledir rm <name>              remove an alias
+simpledir rename <old> <new>     change an alias's name, keeping its path; -f overwrites
+simpledir import <dir>           bind every subdirectory of a tree; -d/--depth (default 1), -p/--prefix, -f/--force, --hidden, -n/--dry-run
+simpledir ls [<query>] [-l]      list aliases; <query> filters on name or path substring; -l forces absolute paths
+simpledir ls --names             one alias per line, no padding, for completion scripts
+simpledir ls --json              JSON object of the same shape as the config file
+simpledir jump <alias[/sub]>     print the bound path to stdout, do not cd
+simpledir edit [<editor>]        open the config in $EDITOR (default), creating an empty one if absent
+simpledir update                 check for a newer release, ask, then install it; --check reports only (exit 1 if an update exists); -y/--yes skips the prompt
+simpledir doctor                 report config, dead aliases, shell wiring and PATH problems; exit 1 if any
+simpledir completions bash|zsh   print a shell completion script
+simpledir init                   print the shell wrapper to append to a shell rc file
+simpledir <alias>                in a shell: jump. elsewhere: same as `jump`
 ```
 
 Exit codes: `0` success, `1` unknown alias or user error, `2` argument parsing
@@ -51,7 +54,7 @@ error (argparse).
 
 An alias argument may carry a path suffix: `dots/src` resolves to `<dots>/src`.
 Suffixes are normalized with `normpath`, so `dots/src/..` and `dots/` both work.
-There is no `..` escaping above the alias root beyond what the filesystem allows.
+The shell wrapper also accepts a raw path: `sd /some/path` just `cd`s.
 
 ## Shell wrapper
 
@@ -99,19 +102,51 @@ name to an absolute directory path. Writes are atomic: temporary file plus
 - `ls` with no aliases: usage hint on stderr, exit `1`
 - `ls <query>` with no match: says so, exit `1`
 - unknown flag: argparse usage error, exit `2`
+- `update` when GitHub is unreachable: says so, exit `1`
+- `update` never replaces a binary with a same-version or unidentifiable download
+
+## Update mechanism
+
+`update` fetches `https://api.github.com/repos/noxthedevwindev-greatest/simpledir/releases/latest`,
+compares `tag_name` against `VERSION`, and on a newer tag downloads the release
+asset `simpledir`, runs it with `--version` to confirm identity and version, then
+writes it next to the target and `os.replace`s it into place.
+
+Additionally, `add` and `ls` may print a one-line nudge to stderr when a newer
+release is known. It is suppressed when stderr is not a terminal, when
+`SIMPLEDIR_NO_UPDATE_CHECK` is set, when the cache in
+`~/.simpledir/update-check.json` is younger than 24 hours, and never on the
+`jump` path.
+
+Environment variables:
+
+```
+SIMPLEDIR_CONFIG_DIR       config directory                (default ~/.simpledir)
+SIMPLEDIR_NO_UPDATE_CHECK  set to anything to disable update checks
+SIMPLEDIR_BIN              override the path `update` writes to
+SIMPLEDIR_UPDATE_URL       override the release API URL (used by the test suite)
+SIMPLEDIR_UPDATE_ASSET_URL override the downloaded asset URL (used by the test suite)
+```
 
 ## Version history
 
+- 3.0.0 — one-command `curl | bash` installer that resolves python through
+  yay/pacman/mise, `update` with verification and atomic self-install, a quiet
+  once-a-day update nudge, `import` for bulk binding, `doctor` for install
+  health, and downloadable release assets. Config format unchanged at
+  `version: 1`.
 - 2.0.0 — path suffixes on alias arguments, `rename`, `add` with fewer
   arguments, `edit`, `ls` filtering, `ls --names`, `ls --json`, shell
-  completions. Config format unchanged at `version: 1`; no migration needed.
+  completions. Config format unchanged at `version: 1`.
 - 1.0.0 — `add`, `rm`, `ls`, `jump`, `init`, the shell wrapper, typo
   suggestions, atomic config writes.
 
 ## Development
 
 ```
-make test            # 77 assertions, runs real bash subprocesses
+make test     # 143 assertions, runs real bash subprocesses
+make assets   # build dist/ (simpledir + install.sh, mode 755)
+make release  # tag from VERSION, push, publish with assets
 vhs docs/demo.tape   # re-record docs/demo.gif (needs vhs and ttyd)
 ```
 
@@ -119,8 +154,9 @@ Repository layout:
 
 ```
 simpledir          the entire tool, one executable Python file
+install.sh         the curl | bash installer
 tests/run.sh       test suite, plain bash
 docs/demo.tape     vhs script that produces docs/demo.gif
 packaging/PKGBUILD Arch package definition
-Makefile           install / uninstall / test targets
+Makefile           install / uninstall / test / assets / release targets
 ```
