@@ -256,6 +256,7 @@ has "uninstall names the purge flag"  "--purge"     "$out"
 has "uninstall reports the binary"    "removed"     "$out"
 has "uninstall reports the rc"        "cleaned"     "$out"
 has "uninstall reminds about reload"  "exec bash"   "$out"
+lacks   "no surprise when target is the running copy" "not the copy you're running" "$out"
 check "uninstall removed the binary"  0 bash -c "! test -e '$d/bin/simpledir'"
 check "uninstall cleaned the block"   0 bash -c "! grep -q '>>> simpledir >>>' '$d/rc'"
 contains "rc keeps what came before"   "my rc" cat "$d/rc"
@@ -275,6 +276,14 @@ d=$(fresh refuse)
 check "uninstall refuses without a tty" 1 un "$d" uninstall
 check "refusal changed nothing"         0 bash -c "test -x '$d/bin/simpledir'"
 check "refusal left the rc"             0 bash -c "grep -q '>>> simpledir >>>' '$d/rc'"
+
+d=$(fresh elsewhere)
+# pointing SIMPLEDIR_BIN somewhere else must be announced, not silent
+contains "uninstall flags a different target" "not the copy you're running" env \
+  SIMPLEDIR_RC="$d/rc" SIMPLEDIR_CONFIG_DIR="$d/cfg" \
+  SIMPLEDIR_BIN="$UNROOT/elsewhere/simpledir" SIMPLEDIR_NO_UPDATE_CHECK=1 \
+  "$SD" uninstall --yes
+check "the running copy was left alone" 0 bash -c "test -x '$SD'"
 
 d=$(fresh declined)
 # the answer has to come through the pty, or stdin isn't a terminal

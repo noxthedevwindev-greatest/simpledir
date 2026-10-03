@@ -518,6 +518,11 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     except UserError:
         count = 0
 
+    # be explicit: we may be removing a different copy than the one running
+    running = Path(sys.argv[0]).resolve()
+    if target != running:
+        print(f"note: removing {target}, not the copy you're running ({running})")
+
     if count and not args.purge:
         print(f"you have {count} alias{'es' if count != 1 else ''} in {CONFIG_FILE}")
         print(f"  these stay. to remove them too: {PROG} uninstall --purge")
@@ -789,7 +794,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("doctor", help="check the install: config, dead aliases, shell wiring, PATH")
     p.set_defaults(func=cmd_doctor)
 
-    p = sub.add_parser("uninstall", help="remove the binary and the shell wrapper")
+    p = sub.add_parser(
+        "uninstall",
+        help="remove the install: binary and shell wrapper (aliases kept unless --purge)",
+    )
     p.add_argument("--purge", action="store_true", help="also delete ~/.simpledir and every alias")
     p.add_argument("-y", "--yes", action="store_true", help="don't ask, just do it")
     p.set_defaults(func=cmd_uninstall)

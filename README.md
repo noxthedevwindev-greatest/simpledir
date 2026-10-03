@@ -158,6 +158,11 @@ rewrites your shell rc with the marked block removed, and keeps a timestamped
 backup of the rc file. your aliases are **data, not installation**, so they stay
 unless you ask for `--purge`; it tells you that option exists either way.
 
+it removes **the install**, not necessarily the copy you're running: it targets
+`~/.local/bin/simpledir` if that's there, otherwise the file you're executing.
+so running a checkout copy still cleans up the installed one. point it
+somewhere else with `SIMPLEDIR_BIN=/path/to/simpledir`.
+
 `bash install.sh --uninstall` does the same thing by calling `simpledir
 uninstall`, and falls back to doing it by hand if the binary is already gone or
 broken.
@@ -307,7 +312,7 @@ back it up if you want:
 ## development
 
 ```bash
-make test                      # 171 assertions, real bash subprocesses
+make test                      # 174 assertions, real bash subprocesses
 vhs docs/demo.tape             # re-record the gif above
 make assets                    # build dist/ for a release
 make release                   # tag, push, publish with assets attached

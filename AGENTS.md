@@ -47,10 +47,10 @@ the positioning.
 ## before you touch anything
 
 ```bash
-make test     # 171 assertions, spawns real bash to verify the wrapper
+make test     # 174 assertions, spawns real bash to verify the wrapper
 ```
 
-it must be 171/171 (or more) before you commit. the suite covers the python
+it must be 174/174 (or more) before you commit. the suite covers the python
 side, the JSON config, the actual `cd` behavior of the emitted shell function,
 `install.sh` (package-manager selection, install/uninstall round trip) and the
 whole `update` path against `file://` stubs, so a change to `cmd_init` that looks
