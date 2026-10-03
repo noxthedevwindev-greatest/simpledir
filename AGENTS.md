@@ -30,14 +30,17 @@ the positioning.
 5. **no silent failure.** an unknown alias, a missing target directory or a
    corrupt config must produce an explanatory message and a non-zero exit.
    `ls` tags dead paths `[missing]`.
+6. **keep `ls` machine-readable.** `--names` is one alias per line and `--json`
+   emits the config file's shape. completion scripts and anything scripting this
+   tool depend on those formats; don't reformat them casually.
 
 ## before you touch anything
 
 ```bash
-make test     # 37 assertions, spawns real bash to verify the wrapper
+make test     # 77 assertions, spawns real bash to verify the wrapper
 ```
 
-it must be 37/37 (or more) before you commit. the suite covers the python
+it must be 77/77 (or more) before you commit. the suite covers the python
 side, the JSON config, and the actual `cd` behavior of the emitted shell
 function, so a change to `cmd_init` that looks cosmetic can still break a test.
 

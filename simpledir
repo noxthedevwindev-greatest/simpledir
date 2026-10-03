@@ -12,6 +12,7 @@ import argparse
 import difflib
 import json
 import os
+import shlex
 import shutil
 import sys
 import tempfile
@@ -23,7 +24,7 @@ VERSION = "2.0.0"
 PROG = "simpledir"
 
 BANNER = f"{PROG} {VERSION} - the next zoxide"
-COMMANDS = ("add", "rm", "ls", "jump", "init")
+COMMANDS = ("add", "rm", "rename", "ls", "jump", "edit", "completions", "init")
 
 
 class UserError(Exception):
@@ -81,14 +82,30 @@ def normalize(path: str) -> str:
     return str(Path(expanded).resolve())
 
 
-def resolve(alias: str, aliases: dict) -> str:
-    if alias not in aliases:
-        raise UserError(suggest(alias, aliases))
-    target = normalize(aliases[alias])
-    if not os.path.isdir(target):
+def resolve(spec: str, aliases: dict) -> str:
+    """Turn `name` or `name/sub/dir` into an existing absolute directory.
+
+    Suffixes cost nothing to support and turn a flat map into something you can
+    navigate deeply: `sd dots/src` is `<dots>/src`.
+    """
+    name, slash, suffix = spec.partition("/")
+    if not name:
         raise UserError(
-            f"alias '{alias}' points at {target}\n"
-            f"  that directory is gone. fix it: {PROG} add --force {alias} <new-path>"
+            f"'{spec}' isn't an alias, it's a path\n"
+            f"  bind it first: {PROG} add <name> {spec}"
+        )
+    if name not in aliases:
+        raise UserError(suggest(name, aliases))
+
+    target = normalize(aliases[name])
+    if slash and suffix:
+        target = os.path.normpath(os.path.join(target, suffix))
+
+    if not os.path.isdir(target):
+        where = f"'{name}'" if not suffix else f"'{spec}'"
+        raise UserError(
+            f"alias {where} resolves to {target}\n"
+            f"  that directory is gone. fix it: {PROG} add --force {name} <new-path>"
         )
     return target
 
@@ -122,14 +139,24 @@ def cmd_add(args: argparse.Namespace) -> int:
     if not os.path.isdir(target):
         die(f"not a directory: {target}")
 
+    name = args.name
+    derived = Path(target).name
+    if name is None:
+        # no name given: use the directory's own name. `cd dotfiles && simpledir add`
+        name = derived
+        if not name:
+            die(f"can't derive a name from {target}. usage: {PROG} add <name> [path]")
+
     data = load()
     aliases = data["aliases"]
-    if args.name in aliases and not args.force:
-        die(f"alias '{args.name}' already exists -> {aliases[args.name]}\n  overwrite: {PROG} add --force {args.name} {target}")
+    if name in aliases and not args.force:
+        die(f"alias '{name}' already exists -> {aliases[name]}\n  overwrite: {PROG} add --force {name} {target}")
 
-    aliases[args.name] = target
+    aliases[name] = target
     save(data)
-    print(f"{args.name} -> {target}")
+    print(f"{name} -> {target}")
+    if derived and name != derived:
+        print(f"  rename it: {PROG} rename {name} <other-name>")
     return 0
 
 
@@ -143,16 +170,55 @@ def cmd_rm(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_ls(args: argparse.Namespace) -> int:
-    aliases = load()["aliases"]
-    if not aliases:
-        print(f"no aliases yet. add one: {PROG} add <name> [path]", file=sys.stderr)
-        return 1
+def cmd_rename(args: argparse.Namespace) -> int:
+    data = load()
+    aliases = data["aliases"]
+    if args.old not in aliases:
+        die(suggest(args.old, aliases))
+    if args.new in aliases and not args.force:
+        die(f"alias '{args.new}' already exists -> {aliases[args.new]}\n  overwrite: {PROG} rename --force {args.old} {args.new}")
+    target = aliases.pop(args.old)
+    aliases[args.new] = target
+    save(data)
+    print(f"{args.old} -> {args.new} ({target})")
+    return 0
 
-    width = max(len(name) for name in aliases)
+
+def rows(aliases: dict, query: str | None = None) -> list[tuple]:
+    """(name, absolute target, missing?) sorted by name, optionally filtered."""
+    out = []
     for name in sorted(aliases):
         target = normalize(aliases[name])
-        gone = "" if os.path.isdir(target) else "   [missing]"
+        if query and query.lower() not in name.lower() and query.lower() not in target.lower():
+            continue
+        out.append((name, target, not os.path.isdir(target)))
+    return out
+
+
+def cmd_ls(args: argparse.Namespace) -> int:
+    aliases = load()["aliases"]
+    found = rows(aliases, args.query)
+
+    if args.names:
+        for name, _, _ in found:
+            print(name)
+        return 0 if found else 1
+
+    if args.json:
+        # same shape as the config file, so it can be piped straight back
+        print(json.dumps({"version": 1, "aliases": {n: t for n, t, _ in found}}, indent=2, sort_keys=True))
+        return 0 if found else 1
+
+    if not found:
+        if aliases and args.query:
+            print(f"nothing matches '{args.query}'. see them all: {PROG} ls", file=sys.stderr)
+        else:
+            print(f"no aliases yet. add one: {PROG} add", file=sys.stderr)
+        return 1
+
+    width = max(len(name) for name, _, _ in found)
+    for name, target, missing in found:
+        gone = "   [missing]" if missing else ""
         shown = target
         if not args.long:
             try:
@@ -167,9 +233,56 @@ def cmd_ls(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_edit(args: argparse.Namespace) -> int:
+    """Open the config in $EDITOR. The JSON is the UI, in the end."""
+    if not CONFIG_FILE.exists():
+        save({"version": 1, "aliases": {}})
+    editor = args.editor or os.environ.get("EDITOR") or os.environ.get("VISUAL") or "vi"
+    argv = shlex.split(editor) + [str(CONFIG_FILE)]
+    try:
+        os.execvp(argv[0], argv)
+    except OSError as exc:
+        die(f"can't run editor {argv[0]!r}: {exc}")
+    return 0  # unreachable unless exec fails silently
+
+
 def cmd_jump(args: argparse.Namespace) -> int:
     aliases = load()["aliases"]
     print(resolve(args.name, aliases))
+    return 0
+
+
+def cmd_completions(args: argparse.Namespace) -> int:
+    if args.shell == "bash":
+        print(
+            f"""# {PROG} bash completion. source this, or install it:
+#   {PROG} completions bash > /usr/share/bash-completion/completions/{PROG}
+_{PROG}_complete() {{
+  local cur names
+  cur="${{COMP_WORDS[COMP_CWORD]}}"
+  names=$(command {PROG} ls --names 2>/dev/null)
+  COMPREPLY=( $(compgen -W "$names" -- "$cur") )
+  if [[ ${{#COMPREPLY[@]}} -eq 0 && -d "$cur" ]]; then
+    # let the shell complete directories too: `sd dots/<tab>`
+    COMPREPLY=( $(compgen -d -- "$cur") )
+  fi
+}}
+complete -o filenames -F _{PROG}_complete {PROG} sd
+"""
+        )
+    else:
+        print(
+            f"""#compdef {PROG} sd
+# {PROG} zsh completion. requires compinit; put this in ~/.zshrc:
+#   {PROG} completions zsh > "${{fpath[1]}}/_{PROG}"
+local -a _sd_aliases
+_sd_aliases=(${{(f)"$(command {PROG} ls --names 2>/dev/null)"}})
+_arguments '1: :->alias' '*: :_files -/'
+if [[ $state == alias ]]; then
+  _describe -t aliases 'directory alias' _sd_aliases
+fi
+"""
+        )
     return 0
 
 
@@ -190,6 +303,7 @@ _{PROG}_jump() {{
   case "${{1-}}" in
     -)  builtin cd -- "$OLDPWD" && return $? ;;
     "") builtin cd -- "$HOME" && return $? ;;
+    /* | ~*)  builtin cd -- "$1" && return $? ;;   # sd /some/path just works
   esac
   local _sd_dir
   _sd_dir=$(command {PROG} jump "$@") || return $?
@@ -225,9 +339,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-V", "--version", action="version", version=BANNER)
     sub = parser.add_subparsers(dest="cmd")
 
-    p = sub.add_parser("add", help="bind an alias to a directory (default: $PWD)")
-    p.add_argument("name")
-    p.add_argument("path", nargs="?")
+    p = sub.add_parser("add", help="bind an alias to a directory (defaults: name from the dir, path to $PWD)")
+    p.add_argument("name", nargs="?", help="alias name; omit to use the directory's own name")
+    p.add_argument("path", nargs="?", help="directory to bind; omit for $PWD")
     p.add_argument("-f", "--force", action="store_true", help="overwrite an existing alias")
     p.set_defaults(func=cmd_add)
 
@@ -235,13 +349,30 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("name")
     p.set_defaults(func=cmd_rm)
 
-    p = sub.add_parser("ls", help="list aliases")
+    p = sub.add_parser("rename", help="change an alias's name, keeping its path")
+    p.add_argument("old")
+    p.add_argument("new")
+    p.add_argument("-f", "--force", action="store_true", help="overwrite an existing alias")
+    p.set_defaults(func=cmd_rename)
+
+    p = sub.add_parser("ls", help="list aliases, optionally filtered by a substring")
+    p.add_argument("query", nargs="?", help="only aliases whose name or path contains this")
     p.add_argument("-l", "--long", action="store_true", help="always print absolute paths")
+    p.add_argument("--names", action="store_true", help="one alias per line, for completion scripts")
+    p.add_argument("--json", action="store_true", dest="json", help="print the same shape as the config file")
     p.set_defaults(func=cmd_ls)
 
     p = sub.add_parser("jump", help="print the directory for an alias (used by `sd`)")
-    p.add_argument("name")
+    p.add_argument("name", help="an alias, optionally with a path: `dots/src`")
     p.set_defaults(func=cmd_jump)
+
+    p = sub.add_parser("edit", help="open the config in $EDITOR")
+    p.add_argument("editor", nargs="?", help="editor command; defaults to $EDITOR")
+    p.set_defaults(func=cmd_edit)
+
+    p = sub.add_parser("completions", help="print a shell completion script")
+    p.add_argument("shell", choices=("bash", "zsh"))
+    p.set_defaults(func=cmd_completions)
 
     p = sub.add_parser("init", help="print the shell wrapper")
     p.set_defaults(func=cmd_init)

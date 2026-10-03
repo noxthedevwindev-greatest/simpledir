@@ -34,6 +34,7 @@ only.
 cd ~/projects/dotfiles && simpledir add dots    # bind this dir
 sd dots                                         # jump
 simpledir dots                                  # same thing, spelled out
+sd dots/nix                                     # jump into a subdirectory
 ```
 
 that's the whole idea. names you choose, no scoring algorithm, no database.
@@ -81,17 +82,23 @@ no package manager, no dependencies, python 3.8+. not in the AUR yet — PR welc
 ## usage
 
 ```bash
-simpledir add <name> [path]   # bind a name. path defaults to $PWD. -f overwrites
-simpledir rm <name>           # unbind
-simpledir ls [-l]             # list. -l for absolute paths
-simpledir jump <name>         # print the path, don't cd
-simpledir init                # print the shell wrapper
+simpledir add [<name>] [<path>]  # bind a name. name defaults to the dir's own name, path to $PWD
+simpledir rm <name>              # unbind
+simpledir rename <old> <new>     # rename, keep the path
+simpledir ls [<query>] [-l]      # list, optionally filtered by name or path substring
+simpledir ls --names             # one alias per line (for completion scripts)
+simpledir ls --json              # same shape as the config file, for scripts and agents
+simpledir jump <alias[/sub]>     # print the path, don't cd
+simpledir edit                   # open the config in $EDITOR
+simpledir completions bash|zsh   # print a completion script
+simpledir init                   # print the shell wrapper
 ```
 
 and in your shell, `sd` / `simpledir` with no subcommand:
 
 ```bash
 sd dots        # cd to the bound dir
+sd dots/nix    # cd into a subdirectory of it
 sd             # -> $HOME
 sd -           # -> previous dir
 simpledir dots # identical to `sd dots`
@@ -105,6 +112,31 @@ simpledir: no alias named 'dotfile'
   did you mean: dotfiles
   see them all: simpledir ls
 ```
+
+## what's new in 2.0
+
+**subdirectory jumps.** `sd dots/nix` is `<dots>/nix`. costs nothing to implement
+and it turns one bookmark into a whole tree, so you bind the three places you
+actually visit instead of forty leaf directories.
+
+**`simpledir rename`.** the alias you picked at 2am was the wrong name.
+rename keeps the path and doesn't touch your shell config.
+
+**`simpledir add` with fewer arguments.** `cd dotfiles && simpledir add` binds it
+as `dotfiles` — the directory names itself. if you gave an explicit name that
+isn't the directory name, it prints the `rename` command you probably want.
+
+**`simpledir edit`.** the config *is* the UI, so open it in `$EDITOR`. this
+creates the file with an empty config if it doesn't exist yet.
+
+**filtering and machine-readable output.** `simpledir ls hy` lists only aliases
+matching `hy` in either the name or the path. `simpledir ls --names` is one name
+per line and `simpledir ls --json` emits the exact shape of the config file, so
+both are easy to consume from a script or an agent.
+
+**shell completions.** `simpledir completions bash` / `zsh`. tab-completes your
+alias names, and falls through to directory completion after a `/` so `sd
+dots/<tab>` keeps working.
 
 ## how the cd works
 
@@ -127,7 +159,7 @@ sd() { _simpledir_jump "$@"; }
 simpledir() {
   case "${1-}" in
     "" | -)             _simpledir_jump "$@" ;;
-    add|rm|ls|jump|init|help|-h|-V|--version|--help) command simpledir "$@" ;;
+    add|rm|rename|ls|jump|edit|completions|init|help|-h|-V|--version|--help) command simpledir "$@" ;;
     -?*)                command simpledir "$@" ;;
     *)                  _simpledir_jump "$@" ;;
   esac
@@ -169,11 +201,13 @@ back it up if you want:
 - alias pointing at a deleted dir: `jump` refuses and says how to rebind, `ls` tags it `[missing]`
 - duplicate alias needs `--force`, no silent clobber
 - no shell alias collisions — `sd` is the only name it takes
+- `simpledir add` in a directory called `dotfiles` binds it as `dotfiles`
+- a subdirectory that doesn't exist reports the *joined* path and the base alias, so the fix is obvious
 
 ## development
 
 ```bash
-make test                      # 37 assertions, real bash subprocesses
+make test                      # 77 assertions, real bash subprocesses
 vhs docs/demo.tape             # re-record the gif above
 ```
 

@@ -33,16 +33,25 @@ simpledir init >> ~/.bashrc
 ## Commands
 
 ```
-simpledir add <name> [path]   bind a name to a directory; path defaults to $PWD; -f overwrites
-simpledir rm <name>           remove an alias
-simpledir ls [-l]             list aliases; -l forces absolute paths
-simpledir jump <name>         print the bound path to stdout, do not cd
-simpledir init                print the shell wrapper to append to a shell rc file
-simpledir <name>              in a shell: jump. elsewhere: same as `jump`
+simpledir add [<name>] [<path>]   bind an alias; name defaults to the directory's basename, path to $PWD; -f overwrites
+simpledir rm <name>               remove an alias
+simpledir rename <old> <new>      change an alias's name, keeping its path; -f overwrites
+simpledir ls [<query>] [-l]       list aliases; <query> filters on name or path substring; -l forces absolute paths
+simpledir ls --names              one alias per line, no padding, for completion scripts
+simpledir ls --json               JSON object of the same shape as the config file
+simpledir jump <alias[/sub]>      print the bound path to stdout, do not cd
+simpledir edit [<editor>]         open the config in $EDITOR (default), creating an empty one if absent
+simpledir completions bash|zsh    print a shell completion script
+simpledir init                    print the shell wrapper to append to a shell rc file
+simpledir <alias>                 in a shell: jump. elsewhere: same as `jump`
 ```
 
 Exit codes: `0` success, `1` unknown alias or user error, `2` argument parsing
 error (argparse).
+
+An alias argument may carry a path suffix: `dots/src` resolves to `<dots>/src`.
+Suffixes are normalized with `normpath`, so `dots/src/..` and `dots/` both work.
+There is no `..` escaping above the alias root beyond what the filesystem allows.
 
 ## Shell wrapper
 
@@ -54,6 +63,7 @@ real binary via `command simpledir`.
 
 - `sd` with no arguments: `cd $HOME`
 - `sd -`: `cd $OLDPWD`
+- `sd dots/src`: `cd` into a subdirectory of a bound alias
 
 Functions rather than shell aliases, because bash expands aliases only in
 interactive shells.
@@ -81,17 +91,27 @@ name to an absolute directory path. Writes are atomic: temporary file plus
 ## Behavior on errors
 
 - unknown alias: message with substring and `difflib` suggestions, exit `1`
-- alias bound to a deleted directory: `jump` refuses and explains how to rebind;
-  `ls` tags it `[missing]`
-- duplicate alias: refused unless `--force` is given
+- alias or alias-with-suffix resolving to a missing directory: `jump` refuses and
+  explains how to rebind; `ls` tags it `[missing]`
+- duplicate alias: refused unless `--force` is given, for both `add` and `rename`
 - corrupt or unreadable config: explains the problem, suggests removal, does not
   silently reset
 - `ls` with no aliases: usage hint on stderr, exit `1`
+- `ls <query>` with no match: says so, exit `1`
+- unknown flag: argparse usage error, exit `2`
+
+## Version history
+
+- 2.0.0 — path suffixes on alias arguments, `rename`, `add` with fewer
+  arguments, `edit`, `ls` filtering, `ls --names`, `ls --json`, shell
+  completions. Config format unchanged at `version: 1`; no migration needed.
+- 1.0.0 — `add`, `rm`, `ls`, `jump`, `init`, the shell wrapper, typo
+  suggestions, atomic config writes.
 
 ## Development
 
 ```
-make test        # 37 assertions, runs real bash subprocesses
+make test            # 77 assertions, runs real bash subprocesses
 vhs docs/demo.tape   # re-record docs/demo.gif (needs vhs and ttyd)
 ```
 

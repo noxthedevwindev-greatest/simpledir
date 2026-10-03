@@ -49,8 +49,18 @@ Sleep 1400ms
 
 Type "clear" Enter
 Sleep 600ms
+Type "cd /tmp && sd dotfiles/hypr" Enter
+Sleep 1500ms
+
+Type "clear" Enter
+Sleep 600ms
+Type "simpledir rename dotfiles dots" Enter
+Sleep 1300ms
+
+Type "clear" Enter
+Sleep 600ms
 Type "cd /tmp && simpledir downloads && pwd" Enter
-Sleep 1400ms
+Sleep 1500ms
 
 Type "clear" Enter
 Sleep 600ms
