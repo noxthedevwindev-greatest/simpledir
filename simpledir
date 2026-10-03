@@ -25,7 +25,7 @@ from pathlib import Path
 CONFIG_DIR = Path(os.environ.get("SIMPLEDIR_CONFIG_DIR", Path.home() / ".simpledir"))
 CONFIG_FILE = CONFIG_DIR / "config.json"
 UPDATE_CACHE = CONFIG_DIR / "update-check.json"
-VERSION = "3.0.0"
+VERSION = "3.1.0"
 PROG = "simpledir"
 
 REPO = "noxthedevwindev-greatest/simpledir"
@@ -34,10 +34,12 @@ RELEASE_ASSET = f"https://github.com/{REPO}/releases/latest/download/simpledir"
 
 BANNER = f"{PROG} {VERSION} - the next zoxide"
 COMMANDS = (
-    "add", "rm", "rename", "ls", "jump", "edit",
-    "import", "update", "doctor", "completions", "init",
+    "add", "rm", "rename", "ls", "jump", "edit", "import",
+    "update", "uninstall", "doctor", "completions", "init",
 )
 CHECK_INTERVAL = 86400  # at most one network round trip per day
+
+RC_MARKERS = ("# >>> simpledir >>>", "# <<< simpledir <<<")
 
 
 class UserError(Exception):
@@ -465,6 +467,119 @@ def cmd_update(args: argparse.Namespace) -> int:
     return 0
 
 
+def rc_candidates() -> list:
+    """rc files that might hold a wrapper block, most likely first.
+
+    SIMPLEDIR_RC is exclusive when set: it names the one file to touch, and
+    nothing else is considered. otherwise it's guessed from $SHELL plus the
+    usual suspects.
+    """
+    if os.environ.get("SIMPLEDIR_RC"):
+        return [Path(os.environ["SIMPLEDIR_RC"])]
+
+    home = Path.home()
+    candidates = []
+    if "zsh" in os.environ.get("SHELL", ""):
+        candidates.append(Path(os.environ.get("ZDOTDIR") or home) / ".zshrc")
+    candidates += [home / ".bashrc", home / ".zshrc", home / ".config/fish/config.fish"]
+
+    unique = []
+    for path in candidates:
+        if path not in unique:
+            unique.append(path)
+    return unique
+
+
+def strip_rc_block(text: str) -> tuple:
+    """Remove every `>>> simpledir >>>` … `<<< simpledir <<<` span."""
+    begin, end = RC_MARKERS
+    kept, inside, found = [], False, False
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped == begin:
+            inside, found = True, True
+            continue
+        if stripped == end:
+            inside = False
+            continue
+        if not inside:
+            kept.append(line)
+    return "".join(kept), found
+
+
+def cmd_uninstall(args: argparse.Namespace) -> int:
+    """Remove the install: the binary, and the wrapper block from shell rc.
+
+    Your aliases are data, not installation, so they stay unless --purge.
+    """
+    target = install_target()
+    try:
+        count = len(load()["aliases"])
+    except UserError:
+        count = 0
+
+    if count and not args.purge:
+        print(f"you have {count} alias{'es' if count != 1 else ''} in {CONFIG_FILE}")
+        print(f"  these stay. to remove them too: {PROG} uninstall --purge")
+
+    if not args.yes:
+        if not sys.stdin.isatty():
+            die("not a terminal, so not asking. re-run with --yes")
+        answer = input(f"  remove {target} and the wrapper from your shell rc? [y/N] ").strip().lower()
+        if answer not in ("y", "yes"):
+            print("  ok, nothing changed")
+            return 0
+
+    touched = []
+    for rc in rc_candidates():
+        try:
+            if not rc.is_file():
+                continue
+            original = rc.read_text(errors="replace")
+        except OSError:
+            continue
+        cleaned, found = strip_rc_block(original)
+        if not found:
+            continue
+        backup = rc.with_name(rc.name + f".bak.{time.strftime('%Y%m%d%H%M%S')}")
+        try:
+            shutil.copy2(rc, backup)
+            staged = rc.with_name(rc.name + f".new.{os.getpid()}")
+            staged.write_text(cleaned)
+            os.replace(staged, rc)
+        except OSError as exc:
+            die(f"couldn't rewrite {rc}: {exc}\n  the original is still there")
+        touched.append((str(rc), str(backup)))
+
+    if not touched:
+        print("no wrapper block found in any shell rc")
+
+    # unlinking a running script is fine on unix: the inode survives until exit
+    if target.is_file():
+        try:
+            target.unlink()
+        except OSError as exc:
+            print(f"couldn't remove {target}: {exc}")
+            print(f"  remove it by hand: rm {target}")
+        else:
+            print(f"removed {target}")
+    else:
+        print(f"nothing to remove at {target}")
+
+    for rc, backup in touched:
+        print(f"cleaned the wrapper from {rc} (backup: {backup})")
+
+    if args.purge:
+        if CONFIG_DIR.exists():
+            shutil.rmtree(CONFIG_DIR, ignore_errors=True)
+            print(f"deleted {CONFIG_DIR} and every alias in it")
+    else:
+        print(f"aliases kept in {CONFIG_FILE}")
+
+    print("open a new shell, or `exec bash`, to drop the old functions")
+    return 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     problems = 0
 
@@ -503,9 +618,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     print("shell")
     wired = []
-    for rc in (Path.home() / ".bashrc", Path.home() / ".zshrc", Path.home() / ".config/fish/config.fish"):
+    for rc in rc_candidates():
         try:
-            if rc.exists() and "# >>> simpledir >>>" in rc.read_text(errors="replace"):
+            if rc.is_file() and RC_MARKERS[0] in rc.read_text(errors="replace"):
                 wired.append(str(rc))
         except OSError:
             pass
@@ -673,6 +788,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("doctor", help="check the install: config, dead aliases, shell wiring, PATH")
     p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser("uninstall", help="remove the binary and the shell wrapper")
+    p.add_argument("--purge", action="store_true", help="also delete ~/.simpledir and every alias")
+    p.add_argument("-y", "--yes", action="store_true", help="don't ask, just do it")
+    p.set_defaults(func=cmd_uninstall)
 
     p = sub.add_parser("completions", help="print a shell completion script")
     p.add_argument("shell", choices=("bash", "zsh"))

@@ -40,14 +40,17 @@ the positioning.
 8. **never trust a download.** `update` runs the fetched asset with `--version`
    and checks both the program name and that the version is actually newer before
    it replaces anything. keep that check.
+9. **`SIMPLEDIR_RC` is exclusive.** when set, `uninstall` and `doctor` touch
+   only that file. never widen it to the guessed candidates — a test run once
+   removed the wrapper from a real `~/.bashrc` because of exactly that.
 
 ## before you touch anything
 
 ```bash
-make test     # 145 assertions, spawns real bash to verify the wrapper
+make test     # 171 assertions, spawns real bash to verify the wrapper
 ```
 
-it must be 145/145 (or more) before you commit. the suite covers the python
+it must be 171/171 (or more) before you commit. the suite covers the python
 side, the JSON config, the actual `cd` behavior of the emitted shell function,
 `install.sh` (package-manager selection, install/uninstall round trip) and the
 whole `update` path against `file://` stubs, so a change to `cmd_init` that looks

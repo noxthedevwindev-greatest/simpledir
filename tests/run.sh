@@ -39,6 +39,15 @@ lacks() { # lacks <label> <needle> <command...>
   fi
 }
 
+has() { # has <label> <needle> <text> - for output you already captured
+  local label=$1 needle=$2 text=$3
+  if [[ $text == *"$needle"* ]]; then
+    pass=$((pass + 1)); printf 'ok   %s\n' "$label"
+  else
+    fail=$((fail + 1)); printf 'FAIL %s (missing %q)\n%s\n' "$label" "$needle" "$text"
+  fi
+}
+
 # the update nudge only fires on a terminal, so those checks get a pty
 on_tty() { script -qec "$*" /dev/null; }
 
@@ -220,6 +229,68 @@ lacks   "ls stays silent off a terminal" "is out" "$SD" ls
 check "jump never nudges even on a tty" 0 on_tty "SIMPLEDIR_UPDATE_URL=file://$SIMPLEDIR_CONFIG_DIR/api_new.json '$SD' jump home"
 contains "ls nudges on a tty" "v99.0.0 is out" on_tty "SIMPLEDIR_UPDATE_URL=file://$SIMPLEDIR_CONFIG_DIR/api_new.json '$SD' ls"
 lacks   "opt-out silences the nudge" "is out" on_tty "SIMPLEDIR_NO_UPDATE_CHECK=1 '$SD' ls"
+
+# --- v3: uninstall -----------------------------------------------------------
+# each scenario gets its own install, because uninstalling deletes the binary
+UNROOT=$(mktemp -d)
+fresh() { # fresh <name> -> prints the scenario dir
+  local dir="$UNROOT/$1"
+  mkdir -p "$dir/bin" "$dir/cfg"
+  install -m 755 "$SD" "$dir/bin/simpledir"
+  env SIMPLEDIR_CONFIG_DIR="$dir/cfg" "$dir/bin/simpledir" add mine "$HOME" >/dev/null
+  printf '# my rc\n\n# >>> simpledir >>>\nwrapper junk\n# <<< simpledir <<<\n\ntail\n' > "$dir/rc"
+  printf '%s' "$dir"
+}
+un() { # un <dir> [args...]
+  local dir=$1; shift
+  env SIMPLEDIR_RC="$dir/rc" SIMPLEDIR_CONFIG_DIR="$dir/cfg" \
+      SIMPLEDIR_BIN="$dir/bin/simpledir" SIMPLEDIR_NO_UPDATE_CHECK=1 \
+      "$dir/bin/simpledir" "$@"
+}
+
+d=$(fresh keep)
+# one run: it deletes itself, so every message assertion reads the same output
+out=$(un "$d" uninstall --yes)
+has "uninstall says aliases survive" "these stay"   "$out"
+has "uninstall names the purge flag"  "--purge"     "$out"
+has "uninstall reports the binary"    "removed"     "$out"
+has "uninstall reports the rc"        "cleaned"     "$out"
+has "uninstall reminds about reload"  "exec bash"   "$out"
+check "uninstall removed the binary"  0 bash -c "! test -e '$d/bin/simpledir'"
+check "uninstall cleaned the block"   0 bash -c "! grep -q '>>> simpledir >>>' '$d/rc'"
+contains "rc keeps what came before"   "my rc" cat "$d/rc"
+contains "rc keeps what came after"    "tail"  cat "$d/rc"
+lacks   "rc block is gone"             "wrapper junk" cat "$d/rc"
+check "uninstall kept a backup"        0 bash -c "compgen -G '$d/rc.bak.*' >/dev/null"
+check "uninstall kept the config"      0 bash -c "test -f '$d/cfg/config.json'"
+check "no staging files left behind"   0 bash -c "! compgen -G '$d/rc.new.*'"
+
+d=$(fresh purge)
+contains "purge says it deletes the config" "deleted" un "$d" uninstall --yes --purge
+check "purge removed the config dir"   0 bash -c "! test -e '$d/cfg'"
+check "purge removed the binary"       0 bash -c "! test -e '$d/bin/simpledir'"
+check "purge cleaned the rc"           0 bash -c "! grep -q '>>> simpledir >>>' '$d/rc'"
+
+d=$(fresh refuse)
+check "uninstall refuses without a tty" 1 un "$d" uninstall
+check "refusal changed nothing"         0 bash -c "test -x '$d/bin/simpledir'"
+check "refusal left the rc"             0 bash -c "grep -q '>>> simpledir >>>' '$d/rc'"
+
+d=$(fresh declined)
+# the answer has to come through the pty, or stdin isn't a terminal
+out=$(printf 'n\n' | on_tty "env SIMPLEDIR_RC=$d/rc SIMPLEDIR_CONFIG_DIR=$d/cfg SIMPLEDIR_BIN=$d/bin/simpledir SIMPLEDIR_NO_UPDATE_CHECK=1 $d/bin/simpledir uninstall")
+has "answering no changes nothing" "nothing changed" "$out"
+check "binary survived the no"         0 bash -c "test -x '$d/bin/simpledir'"
+check "rc survived the no"             0 bash -c "grep -q '>>> simpledir >>>' '$d/rc'"
+
+d=$(fresh norc)
+rm -f "$d/rc"
+contains "uninstall tolerates no rc"   "no wrapper block" un "$d" uninstall --yes
+check "binary still removed without an rc" 0 bash -c "! test -e '$d/bin/simpledir'"
+
+# SIMPLEDIR_RC is exclusive: it must not reach for the real ~/.bashrc
+check "SIMPLEDIR_RC is exclusive"      0 bash -c "grep -q '>>> simpledir >>>' '$HOME/.bashrc'"
+rm -rf "$UNROOT"
 
 # --- v3: doctor ---------------------------------------------------------------
 rm -rf "$SIMPLEDIR_CONFIG_DIR"

@@ -112,6 +112,7 @@ simpledir ls --json              # same shape as the config file, for scripts an
 simpledir jump <alias[/sub]>     # print the path, don't cd
 simpledir edit                   # open the config in $EDITOR
 simpledir update                 # check for a newer release, install it if you want
+simpledir uninstall [--purge]    # remove the binary and the shell wrapper
 simpledir doctor                 # check your install: dead aliases, rc wiring, PATH
 simpledir completions bash|zsh   # print a completion script
 simpledir init                   # print the shell wrapper
@@ -144,6 +145,23 @@ simpledir: no alias named 'dotfile'
   see them all: simpledir ls
 ```
 
+## uninstalling
+
+```bash
+simpledir uninstall              # remove the binary and the wrapper block, ask first
+simpledir uninstall --purge      # also delete ~/.simpledir and every alias
+simpledir uninstall --yes        # no prompt, for scripts
+```
+
+it deletes the running script (fine on unix — the inode outlives the process),
+rewrites your shell rc with the marked block removed, and keeps a timestamped
+backup of the rc file. your aliases are **data, not installation**, so they stay
+unless you ask for `--purge`; it tells you that option exists either way.
+
+`bash install.sh --uninstall` does the same thing by calling `simpledir
+uninstall`, and falls back to doing it by hand if the binary is already gone or
+broken.
+
 ## staying up to date
 
 ```bash
@@ -165,6 +183,12 @@ simpledir: v3.1.0 is out (you're on v3.0.0). `simpledir update` installs it.
 ```
 
 opt out entirely with `SIMPLEDIR_NO_UPDATE_CHECK=1`.
+
+## what's new in 3.1
+
+**`simpledir uninstall`.** the tool removes itself: binary gone, wrapper block
+gone from your shell rc (with a backup), aliases kept unless you say `--purge`.
+asks before touching anything, and `--yes` skips the ask.
 
 ## what's new in 3.0
 
@@ -283,7 +307,7 @@ back it up if you want:
 ## development
 
 ```bash
-make test                      # 145 assertions, real bash subprocesses
+make test                      # 171 assertions, real bash subprocesses
 vhs docs/demo.tape             # re-record the gif above
 make assets                    # build dist/ for a release
 make release                   # tag, push, publish with assets attached

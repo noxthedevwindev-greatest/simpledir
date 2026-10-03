@@ -175,10 +175,19 @@ wire_rc() {
 }
 
 uninstall() {
+  # prefer the tool's own uninstaller: one implementation of "what to remove".
+  # SIMPLEDIR_RC keeps it to this installerrc file and nothing else.
+  local rc; rc=$(pick_rc)
+  if [ -x "$BIN" ]; then
+    if SIMPLEDIR_RC="$rc" "$BIN" uninstall --yes; then
+      return 0
+    fi
+    warn "simpledir uninstall exited non-zero, falling back to doing it by hand"
+  fi
+
+  # fall back to doing it by hand, for when the binary is already gone or broken
   command -v simpledir >/dev/null 2>&1 && info "removing $BIN"
   rm -f "$BIN"
-  local rc
-  rc=$(pick_rc)
   if [ -f "$rc" ] && grep -qF "$MARK_BEGIN" "$rc"; then
     cp -p "$rc" "$rc.bak.$(date +%Y%m%d%H%M%S)"
     sed "/$(printf '%s' "$MARK_BEGIN" | sed 's/[][\.*^$/]/\\&/g')/,/$(printf '%s' "$MARK_END" | sed 's/[][\.*^$/]/\\&/g')/d" "$rc" > "$rc.tmp"

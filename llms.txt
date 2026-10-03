@@ -43,6 +43,7 @@ simpledir ls --json              JSON object of the same shape as the config fil
 simpledir jump <alias[/sub]>     print the bound path to stdout, do not cd
 simpledir edit [<editor>]        open the config in $EDITOR (default), creating an empty one if absent
 simpledir update                 check for a newer release, ask, then install it; --check reports only (exit 1 if an update exists); -y/--yes skips the prompt
+simpledir uninstall [--purge]    remove the binary and the shell wrapper block; --purge also deletes ~/.simpledir and every alias; -y/--yes skips the prompt
 simpledir doctor                 report config, dead aliases, shell wiring and PATH problems; exit 1 if any
 simpledir completions bash|zsh   print a shell completion script
 simpledir init                   print the shell wrapper to append to a shell rc file
@@ -104,6 +105,20 @@ name to an absolute directory path. Writes are atomic: temporary file plus
 - unknown flag: argparse usage error, exit `2`
 - `update` when GitHub is unreachable: says so, exit `1`
 - `update` never replaces a binary with a same-version or unidentifiable download
+- `uninstall` without a terminal and without `--yes`: refuses rather than
+  guessing, exit `1`
+
+## Uninstall
+
+`simpledir uninstall` removes the binary at `install_target()` and strips every
+`# >>> simpledir >>>` … `# <<< simpledir <<<` span from the rc files in
+`rc_candidates()`, rewriting each through a staged file and leaving a
+`<rc>.bak.<timestamp>` backup. Aliases in `~/.simpledir` are preserved unless
+`--purge` is given. Deleting the running script is safe on unix.
+
+`SIMPLEDIR_RC`, when set, is exclusive: it names the only rc file considered.
+Without it, candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc`
+and `~/.config/fish/config.fish`.
 
 ## Update mechanism
 
@@ -123,13 +138,17 @@ Environment variables:
 ```
 SIMPLEDIR_CONFIG_DIR       config directory                (default ~/.simpledir)
 SIMPLEDIR_NO_UPDATE_CHECK  set to anything to disable update checks
-SIMPLEDIR_BIN              override the path `update` writes to
+SIMPLEDIR_BIN              override the path `update` writes to, and `uninstall` removes
+SIMPLEDIR_RC               the only rc file `uninstall` and `doctor` will touch
 SIMPLEDIR_UPDATE_URL       override the release API URL (used by the test suite)
 SIMPLEDIR_UPDATE_ASSET_URL override the downloaded asset URL (used by the test suite)
 ```
 
 ## Version history
 
+- 3.1.0 — `uninstall`: the tool removes its own binary and the wrapper block
+  from shell rc, keeping aliases unless `--purge`. `install.sh --uninstall` now
+  delegates to it. Config format unchanged at `version: 1`.
 - 3.0.0 — one-command `curl | bash` installer that resolves python through
   yay/pacman/mise, `update` with verification and atomic self-install, a quiet
   once-a-day update nudge, `import` for bulk binding, `doctor` for install
@@ -144,7 +163,7 @@ SIMPLEDIR_UPDATE_ASSET_URL override the downloaded asset URL (used by the test s
 ## Development
 
 ```
-make test     # 145 assertions, runs real bash subprocesses
+make test     # 171 assertions, runs real bash subprocesses
 make assets   # build dist/ (simpledir + install.sh, mode 755)
 make release  # tag from VERSION, push, publish with assets
 vhs docs/demo.tape   # re-record docs/demo.gif (needs vhs and ttyd)
