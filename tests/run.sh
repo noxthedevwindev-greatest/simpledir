@@ -273,10 +273,24 @@ contains "rc has the begin marker" "# >>> simpledir >>>" cat "$FAKEHOME/withrc/.
 check "rc marker appears once" 0 bash -c \
   "[ \$(grep -c '>>> simpledir >>>' '$FAKEHOME/withrc/.bashrc') -eq 1 ]"
 check "rc block defines sd" 0 bash -c "grep -q '^sd()' '$FAKEHOME/withrc/.bashrc'"
-check "wired shell actually jumps" 0 bash --noprofile --norc -c "
-  export HOME='$FAKEHOME/withrc' SIMPLEDIR_CONFIG_DIR='$SIMPLEDIR_CONFIG_DIR'
+check "wired shell actually jumps" 0 env -i HOME="$FAKEHOME/withrc" \
+  SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" PATH="/usr/bin:/bin" TERM=dumb \
+  bash --noprofile --norc -c "
   source '$FAKEHOME/withrc/.bashrc'
   cd /tmp; sd home; [[ \$PWD == '$HOME' ]]"
+# the fresh install must be the one that answers, not some other simpledir
+# already on the runner's PATH. `command -v` would answer "simpledir" because
+# the rc defines a function of that name; `type -P` asks for the path instead.
+check "wired shell uses the new install" 0 env -i HOME="$FAKEHOME/withrc" \
+  SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" PATH="/usr/bin:/bin" TERM=dumb \
+  bash --noprofile --norc -c "
+  source '$FAKEHOME/withrc/.bashrc'
+  [[ \$(type -P simpledir) == '$FAKEHOME/withrc/.local/bin/simpledir' ]]"
+check "the installed copy reports its version" 0 env -i HOME="$FAKEHOME/withrc" \
+  SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" PATH="/usr/bin:/bin" TERM=dumb \
+  bash --noprofile --norc -c "
+  source '$FAKEHOME/withrc/.bashrc'
+  simpledir --version | grep -q '^simpledir 3'"
 
 check "re-running refreshes"            0 "$helper" "$FAKEHOME/withrc"
 check "still one marker after re-run" 0 bash -c \

@@ -283,7 +283,7 @@ back it up if you want:
 ## development
 
 ```bash
-make test                      # 143 assertions, real bash subprocesses
+make test                      # 145 assertions, real bash subprocesses
 vhs docs/demo.tape             # re-record the gif above
 make assets                    # build dist/ for a release
 make release                   # tag, push, publish with assets attached

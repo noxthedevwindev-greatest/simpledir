@@ -144,7 +144,7 @@ SIMPLEDIR_UPDATE_ASSET_URL override the downloaded asset URL (used by the test s
 ## Development
 
 ```
-make test     # 143 assertions, runs real bash subprocesses
+make test     # 145 assertions, runs real bash subprocesses
 make assets   # build dist/ (simpledir + install.sh, mode 755)
 make release  # tag from VERSION, push, publish with assets
 vhs docs/demo.tape   # re-record docs/demo.gif (needs vhs and ttyd)
