@@ -182,4 +182,5 @@ and the map. feeding a doc-fetching tool? [`llms.txt`](llms.txt).
 
 ## license
 
-MIT. do what you want with it.
+MIT. do what you want with it. written and maintained by one person — see
+[CONTRIBUTORS.md](CONTRIBUTORS.md), PRs welcome.

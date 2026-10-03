@@ -13,6 +13,7 @@ Complements, does not replace, [zoxide](https://github.com/ajeetdsouza/zoxide).
 
 - [README.md](https://github.com/noxthedevwindev-greatest/simpledir/blob/main/README.md): full documentation
 - [AGENTS.md](https://github.com/noxthedevwindev-greatest/simpledir/blob/main/AGENTS.md): notes for coding agents working on this repository
+- [CONTRIBUTORS.md](https://github.com/noxthedevwindev-greatest/simpledir/blob/main/CONTRIBUTORS.md): authorship and how to contribute
 - [LICENSE](https://github.com/noxthedevwindev-greatest/simpledir/blob/main/LICENSE): MIT
 
 ## Install
