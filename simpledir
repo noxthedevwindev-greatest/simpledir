@@ -25,7 +25,7 @@ from pathlib import Path
 CONFIG_DIR = Path(os.environ.get("SIMPLEDIR_CONFIG_DIR", Path.home() / ".simpledir"))
 CONFIG_FILE = CONFIG_DIR / "config.json"
 UPDATE_CACHE = CONFIG_DIR / "update-check.json"
-VERSION = "3.1.0"
+VERSION = "4.0.0"
 PROG = "simpledir"
 
 REPO = "noxthedevwindev-greatest/simpledir"
@@ -34,7 +34,7 @@ RELEASE_ASSET = f"https://github.com/{REPO}/releases/latest/download/simpledir"
 
 BANNER = f"{PROG} {VERSION} - the next zoxide"
 COMMANDS = (
-    "add", "rm", "rename", "ls", "jump", "edit", "import",
+    "add", "rm", "rename", "ls", "jump", "edit", "import", "suggest", "i",
     "update", "uninstall", "doctor", "completions", "init",
 )
 CHECK_INTERVAL = 86400  # at most one network round trip per day
@@ -91,10 +91,26 @@ def save(data: dict) -> None:
 # ------------------------------------------------------------------------- helpers
 
 
-def normalize(path: str) -> str:
-    """Absolute, symlink-resolved, ~-collapsed path."""
+def normalize(path: str, keep_symlinks: bool = False) -> str:
+    """Absolute, ~-collapsed path.
+
+    Symlinks are resolved unless asked not to, which is what `add` does by
+    default. On read we never resolve: an alias should mean the path you gave
+    it, even after the target moves.
+    """
     expanded = os.path.expanduser(os.path.expandvars(path))
+    if keep_symlinks:
+        return os.path.abspath(expanded)
     return str(Path(expanded).resolve())
+
+
+def as_stored(path: str) -> str:
+    """What an alias means, as stored: absolute, symlinks left alone.
+
+    `add` resolves symlinks unless asked not to, but reading an alias must never
+    rewrite it: --keep-symlinks would be a lie otherwise.
+    """
+    return normalize(path, keep_symlinks=True)
 
 
 def resolve(spec: str, aliases: dict) -> str:
@@ -109,10 +125,22 @@ def resolve(spec: str, aliases: dict) -> str:
             f"'{spec}' isn't an alias, it's a path\n"
             f"  bind it first: {PROG} add <name> {spec}"
         )
-    if name not in aliases:
-        raise UserError(suggest(name, aliases))
 
-    target = normalize(aliases[name])
+    if name not in aliases:
+        # zoxide-style: a unique prefix is good enough. `sd hy` finds `hypr`,
+        # but `sd h` with two candidates still fails and says so.
+        matches = [n for n in sorted(aliases) if n.startswith(name)]
+        if len(matches) == 1:
+            name = matches[0]
+        else:
+            if len(matches) > 1:
+                raise UserError(
+                    f"'{name}' matches several aliases: " + " ".join(matches) + "\n"
+                    f"  use the whole name, or {PROG} ls"
+                )
+            raise UserError(suggest(name, aliases))
+
+    target = as_stored(aliases[name])
     if slash and suffix:
         target = os.path.normpath(os.path.join(target, suffix))
 
@@ -239,7 +267,7 @@ def nudge() -> None:
 
 def cmd_add(args: argparse.Namespace) -> int:
     raw = args.path or os.getcwd()
-    target = normalize(raw)
+    target = normalize(raw, args.keep_symlinks)
     if not os.path.isdir(target):
         die(f"not a directory: {target}")
 
@@ -261,6 +289,8 @@ def cmd_add(args: argparse.Namespace) -> int:
     print(f"{name} -> {target}")
     if derived and name != derived:
         print(f"  rename it: {PROG} rename {name} <other-name>")
+    if args.keep_symlinks and Path(target).is_symlink():
+        print(f"  kept the symlink: {target}")
     nudge()
     return 0
 
@@ -293,7 +323,7 @@ def rows(aliases: dict, query: str | None = None) -> list[tuple]:
     """(name, absolute target, missing?) sorted by name, optionally filtered."""
     out = []
     for name in sorted(aliases):
-        target = normalize(aliases[name])
+        target = as_stored(aliases[name])
         if query and query.lower() not in name.lower() and query.lower() not in target.lower():
             continue
         out.append((name, target, not os.path.isdir(target)))
@@ -358,6 +388,226 @@ def cmd_jump(args: argparse.Namespace) -> int:
     return 0
 
 
+def history_candidates() -> list:
+    """Every history file we would consider, existing or not."""
+    home = Path.home()
+    candidates = [
+        home / ".bash_history",
+        home / ".zsh_history",
+        home / ".local/share/fish/fish_history",
+        home / ".config/fish/fish_history",
+    ]
+    extra = os.environ.get("SIMPLEDIR_HISTORY")
+    if extra:
+        candidates = [Path(extra)] + candidates
+    return candidates
+
+
+def history_files() -> list:
+    return [path for path in history_candidates() if path.is_file()]
+
+
+def history_commands(path: Path) -> list:
+    """Pull `cd`-ish commands out of one history file.
+
+    Three formats, one shape out. Anything unreadable or unrecognised is
+    skipped: a history file is a log, not a data format, so it will contain
+    junk and this must never raise.
+    """
+    try:
+        raw = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+
+    commands = []
+    for line in raw:
+        line = line.strip()
+        if not line:
+            continue
+        if path.name == "fish_history":
+            # `- cmd: cd /somewhere`
+            _, _, line = line.partition("cmd: ")
+        elif line.startswith(": "):
+            # zsh extended history: `: 1699999999:0;cd /somewhere`
+            _, _, line = line.partition(";")
+        elif ";" in line and line[0].isdigit():
+            # fish single-line: `1699999999 cd /somewhere;`
+            line = line.split(";", 1)[0]
+        commands.append(line)
+    return commands
+
+
+CD_WORDS = ("cd", "pushd", "z")
+SEPARATORS = {";", "&&", "||", "|", "(", "{", "!", "then", "else", "do", "sudo", "command", "time", "nohup", "time", "builtin"}
+
+
+def cd_targets(command: str) -> list:
+    """Directories a shell command changes into, if any.
+
+    handles `cd x`, `cd x y`, `cd -`, quoted paths, and `pushd x`. `cd` only
+    counts at the start of a command or after a separator, so `echo cd /tmp`
+    doesn't turn into a suggestion.
+    """
+    try:
+        words = shlex.split(command, comments=True)
+    except ValueError:
+        words = command.split()
+
+    for index, word in enumerate(words):
+        if word not in CD_WORDS:
+            continue
+        if index > 0 and words[index - 1] not in SEPARATORS:
+            continue
+        rest = [w for w in words[index + 1:] if not w.startswith("-")]
+        if not rest:
+            continue  # bare `cd` is $HOME, not worth learning
+        if rest[0] == "-":
+            continue  # that's $OLDPWD, not a place
+        if len(rest) > 1 and os.path.isabs(rest[-1]):
+            return [rest[-1]]  # `cd -x /some/path` (zoxide does this)
+        return [rest[0]]
+    return []
+
+
+def cd_candidates(raw: str) -> list:
+    """Directories a history `cd` target could mean.
+
+    History is full of relative paths — people type `cd Projects` from their home
+    directory all day. Resolving those against our cwd would be nonsense, so
+    they're resolved against $HOME, which is where they almost always mean.
+    """
+    if raw.startswith("~") or os.path.isabs(raw):
+        return [normalize(raw)]
+    return [normalize(os.path.join(str(Path.home()), raw))]
+
+
+def cmd_suggest(args: argparse.Namespace) -> int:
+    """Mine your shell history for directories and offer to name them.
+
+    This is the one genuinely good idea in the frecency crowd, minus the
+    database: your shell already recorded where you go, so read that instead of
+    keeping a second copy of it.
+    """
+    files = history_files()
+    if not files:
+        looked = "\n  ".join(str(p) for p in history_candidates())
+        die(f"no shell history found. looked for:\n  {looked}\ntell me where yours is: SIMPLEDIR_HISTORY=/path/to/history {PROG} suggest")
+
+    counts: dict = {}
+    commands = 0
+    for path in files:
+        for command in history_commands(path):
+            commands += 1
+            for raw in cd_targets(command):
+                for expanded in cd_candidates(raw):
+                    if os.path.isdir(expanded):
+                        counts[expanded] = counts.get(expanded, 0) + 1
+
+    if not counts:
+        die(f"no `cd` targets in {len(files)} history file(s). is your history enabled? (HISTFILE)")
+
+    bound = {as_stored(p) for p in load()["aliases"].values()}
+    ranked = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
+    ranked = [(path, n) for path, n in ranked if path not in bound][: args.top]
+
+    if not ranked:
+        print(f"every directory in your history is already bound ({len(bound)} aliases)")
+        return 0
+
+    if args.json:
+        print(json.dumps({path: n for path, n in ranked}, indent=2, sort_keys=True))
+        return 0
+
+    if args.bind:
+        data = load()
+        aliases = data["aliases"]
+        made = []
+        for path, _ in ranked:
+            name = name_for(path, set(aliases))
+            aliases[name] = path
+            made.append((name, path))
+        save(data)
+        print(f"bound {len(made)}:")
+        for name, path in made:
+            print(f"  {name} -> {path}")
+        print(f"\nrename any of them: {PROG} rename <old> <new>")
+        return 0
+
+    width = max(len(path) for path, _ in ranked)
+    print(f"{commands} history commands from {len(files)} file(s), {len(counts)} distinct directories")
+    print(f"{len(bound)} already bound, showing the top {len(ranked)}:\n")
+    for path, hits in ranked:
+        print(f"  {hits:>5}x  {path.ljust(width)}")
+    print("\nbind them all:")
+    for path, _ in ranked:
+        print(f"  {PROG} add {name_for(path)} {shell_quote(path)}")
+    return 0
+
+
+def name_for(path: str, taken=()) -> str:
+    """A decent alias name for a directory: its own name, de-duplicated."""
+    base = Path(path).name or path.strip("/").replace("/", "-")
+    base = re.sub(r"[^A-Za-z0-9._-]", "-", base)
+    name, counter = base, 2
+    while name in taken:
+        name = f"{base}{counter}"
+        counter += 1
+    return name
+
+
+def shell_quote(value: str) -> str:
+    return shlex.quote(value) if re.search(r"[\s'\"$`\\]", value) else value
+
+
+def cmd_pick(args: argparse.Namespace) -> int:
+    """Interactive picker. fzf when it's installed, a numbered list when not."""
+    found = rows(load()["aliases"], args.query)
+    if not found:
+        die("nothing to pick from. add one: " + f"{PROG} add")
+
+    entries = [
+        (name, target + ("   [missing]" if missing else ""))
+        for name, target, missing in found
+    ]
+
+    if shutil.which("fzf") and not os.environ.get("SIMPLEDIR_NO_FZF"):
+        feed = "".join(f"{name}\t{shown}\n" for name, shown in entries)
+        chosen = subprocess.run(
+            ["fzf", "--delimiter=\t", "--with-nth=1,2", "--prompt=sd> ", "--height=40%"],
+            input=feed, capture_output=True, text=True,
+        )
+        if chosen.returncode != 0 or not chosen.stdout.strip():
+            return 1  # user pressed escape
+        print(chosen.stdout.strip().split("\t")[0])
+        return 0
+
+    if os.environ.get("SIMPLEDIR_NO_FZF"):
+        reason = "fzf disabled (SIMPLEDIR_NO_FZF)"
+    else:
+        reason = "no fzf installed"
+    print(f"{reason}, so: pick a number or type a name\n")
+    for number, (name, shown) in enumerate(entries, 1):
+        print(f"  {number:>3}  {name.ljust(max(len(n) for n, _ in entries))}  {shown}")
+    try:
+        answer = input("\n> ").strip()
+    except EOFError:
+        return 1
+    if not answer:
+        return 1
+
+    names = [name for name, _ in entries]
+    if answer.isdigit():
+        index = int(answer)
+        if not 1 <= index <= len(entries):
+            raise UserError(f"no entry {answer}. there are {len(entries)}.")
+        print(names[index - 1])
+        return 0
+    if answer not in names:
+        raise UserError(suggest(answer, load()["aliases"]))
+    print(answer)
+    return 0
+
+
 def cmd_import(args: argparse.Namespace) -> int:
     """Bind every subdirectory of a tree in one shot.
 
@@ -390,7 +640,7 @@ def cmd_import(args: argparse.Namespace) -> int:
         if name in aliases and not args.force:
             skipped.append(name)
             continue
-        aliases[name] = normalize(target)
+        aliases[name] = normalize(target, args.keep_symlinks)
         bound.append(name)
 
     if bound and not args.dry_run:
@@ -750,6 +1000,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("name", nargs="?", help="alias name; omit to use the directory's own name")
     p.add_argument("path", nargs="?", help="directory to bind; omit for $PWD")
     p.add_argument("-f", "--force", action="store_true", help="overwrite an existing alias")
+    p.add_argument(
+        "--keep-symlinks",
+        action="store_true",
+        help="store the path as typed instead of resolving symlinks (zoxide's _ZO_RESOLVE_SYMLINKS=0)",
+    )
     p.set_defaults(func=cmd_add)
 
     p = sub.add_parser("rm", help="delete an alias")
@@ -769,7 +1024,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", dest="json", help="print the same shape as the config file")
     p.set_defaults(func=cmd_ls)
 
-    p = sub.add_parser("jump", help="print the directory for an alias (used by `sd`)")
+    p = sub.add_parser(
+        "jump",
+        help="print the directory for an alias (a unique name prefix is fine too)",
+    )
     p.add_argument("name", help="an alias, optionally with a path: `dots/src`")
     p.set_defaults(func=cmd_jump)
 
@@ -784,7 +1042,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-f", "--force", action="store_true", help="overwrite existing aliases")
     p.add_argument("--hidden", action="store_true", help="include dot-directories")
     p.add_argument("-n", "--dry-run", action="store_true", help="show what would happen, change nothing")
+    p.add_argument("--keep-symlinks", action="store_true", help="store paths as found, not resolved")
     p.set_defaults(func=cmd_import)
+
+    p = sub.add_parser(
+        "suggest",
+        help="mine your shell history for directories and offer to name them",
+    )
+    p.add_argument("-n", "--top", type=int, default=10, help="how many to show (default 10)")
+    p.add_argument("--bind", action="store_true", help="actually create the aliases, named after the directories")
+    p.add_argument("--json", action="store_true", dest="json", help="print the candidates as JSON")
+    p.set_defaults(func=cmd_suggest)
+
+    p = sub.add_parser("i", help="interactive picker: fzf if installed, numbered list otherwise")
+    p.add_argument("query", nargs="?", help="only consider aliases matching this")
+    p.set_defaults(func=cmd_pick)
 
     p = sub.add_parser("update", help="check for a newer release and install it")
     p.add_argument("--check", action="store_true", help="only report; exit 1 if an update exists")

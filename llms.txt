@@ -33,10 +33,12 @@ From source: `git clone … && make install`.
 ## Commands
 
 ```
-simpledir add [<name>] [<path>]  bind an alias; name defaults to the directory's basename, path to $PWD; -f overwrites
+simpledir add [<name>] [<path>]  bind an alias; name defaults to the directory's basename, path to $PWD; -f overwrites; --keep-symlinks stores the path unresolved
 simpledir rm <name>              remove an alias
 simpledir rename <old> <new>     change an alias's name, keeping its path; -f overwrites
-simpledir import <dir>           bind every subdirectory of a tree; -d/--depth (default 1), -p/--prefix, -f/--force, --hidden, -n/--dry-run
+simpledir import <dir>           bind every subdirectory of a tree; -d/--depth (default 1), -p/--prefix, -f/--force, --hidden, -n/--dry-run, --keep-symlinks
+simpledir suggest                mine shell history for directories to name; -n/--top (default 10), --bind to actually create them, --json
+simpledir i [<query>]            interactive picker; uses fzf when installed, otherwise a numbered list
 simpledir ls [<query>] [-l]      list aliases; <query> filters on name or path substring; -l forces absolute paths
 simpledir ls --names             one alias per line, no padding, for completion scripts
 simpledir ls --json              JSON object of the same shape as the config file
@@ -56,6 +58,34 @@ error (argparse).
 An alias argument may carry a path suffix: `dots/src` resolves to `<dots>/src`.
 Suffixes are normalized with `normpath`, so `dots/src/..` and `dots/` both work.
 The shell wrapper also accepts a raw path: `sd /some/path` just `cd`s.
+
+An exact alias name always wins. If there is no exact match, a **unique name
+prefix** is accepted: `hy` jumps to `hypr`. Two or more candidates is an error
+that lists them, never a guess.
+
+## History mining
+
+`suggest` reads `~/.bash_history`, `~/.zsh_history` and the fish history files
+(`SIMPLEDIR_HISTORY=/path` adds another file), and understands bash plain lines,
+zsh extended history (`: <time>:<dur>;<cmd>`) and fish (`- cmd: <cmd>`). It
+extracts directories from `cd`, `pushd` and `z`, including `cd a b` and `cd -x /p`,
+and ignores bare `cd`, `cd -`, `~`, and anything that is not an existing
+directory. `cd` only counts at the start of a command or after a separator
+(`&&`, `||`, `;`, `|`, …), so `echo cd /tmp` is not a suggestion.
+
+Relative history targets (`cd Projects`) are resolved against `$HOME`, since the
+directory they were typed from is not recorded anywhere. They are skipped when
+that path does not exist. Counts how often each directory appears, drops the ones already bound,
+ranks by frequency, and prints a list plus ready-to-paste `simpledir add` lines.
+`--bind` creates them, naming each after its own directory and de-duplicating
+collisions with a numeric suffix. `--json` prints the candidates as a JSON object.
+
+## Symlinks
+
+`add` and `import` resolve symlinks unless `--keep-symlinks` is given, which
+stores `os.path.abspath` instead of `Path.resolve()`. Reading an alias always
+uses `as_stored()`, which never resolves: a path bound with `--keep-symlinks`
+stays symlinked for the life of the alias.
 
 ## Shell wrapper
 
@@ -140,12 +170,17 @@ SIMPLEDIR_CONFIG_DIR       config directory                (default ~/.simpledir
 SIMPLEDIR_NO_UPDATE_CHECK  set to anything to disable update checks
 SIMPLEDIR_BIN              override the path `update` writes to, and `uninstall` removes
 SIMPLEDIR_RC               the only rc file `uninstall` and `doctor` will touch
+SIMPLEDIR_HISTORY          an extra history file for `suggest` to read
+SIMPLEDIR_NO_FZF           set to anything to make `simpledir i` skip fzf
 SIMPLEDIR_UPDATE_URL       override the release API URL (used by the test suite)
 SIMPLEDIR_UPDATE_ASSET_URL override the downloaded asset URL (used by the test suite)
 ```
 
 ## Version history
 
+- 4.0.0 — `suggest` (history mining), `i` (interactive picker, fzf optional),
+  `add`/`import --keep-symlinks`, and unique-prefix matching on jump. Reading an
+  alias no longer resolves symlinks. Config format unchanged at `version: 1`.
 - 3.1.0 — `uninstall`: the tool removes its own binary and the wrapper block
   from shell rc, keeping aliases unless `--purge`. `install.sh --uninstall` now
   delegates to it. Config format unchanged at `version: 1`.
@@ -163,7 +198,7 @@ SIMPLEDIR_UPDATE_ASSET_URL override the downloaded asset URL (used by the test s
 ## Development
 
 ```
-make test     # 174 assertions, runs real bash subprocesses
+make test     # 219 assertions, runs real bash subprocesses
 make assets   # build dist/ (simpledir + install.sh, mode 755)
 make release  # tag from VERSION, push, publish with assets
 vhs docs/demo.tape   # re-record docs/demo.gif (needs vhs and ttyd)

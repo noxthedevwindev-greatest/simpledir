@@ -1,7 +1,7 @@
 # Maintainer: NoxTheDev <https://github.com/noxthedevwindev-greatest>
 # Contributor: Your Name <you@example.com>
 pkgname=simpledir
-pkgver=3.1.0
+pkgver=4.0.0
 pkgrel=1
 pkgdesc="Named directory shortcuts for the shell - a database-free zoxide alternative"
 arch=('any')

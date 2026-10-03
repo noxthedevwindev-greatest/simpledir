@@ -4,6 +4,7 @@ set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 SD="$ROOT/simpledir"
+major=$("$SD" --version | awk '{print $2}' | cut -d. -f1)
 export SIMPLEDIR_CONFIG_DIR=$(mktemp -d)
 trap 'rm -rf "$SIMPLEDIR_CONFIG_DIR"' EXIT
 
@@ -74,7 +75,8 @@ check "bare form jumps"        0 "$SD" dotdir
 check "jump unknown exits 1"   1 "$SD" jump zzzz
 contains "jump echoes path"    "$HOME" "$SD" jump home
 contains "suggests near miss"  "did you mean" "$SD" jump hoem
-contains "suggests substring"  "did you mean" "$SD" jump dot
+contains "suggests substring"  "did you mean" "$SD" jump dotdirx
+contains "suggests a near miss on a typo" "did you mean: dotdir" "$SD" jump dotdirx
 contains "no args = help"      "usage:" "$SD"
 
 # --- rm ---------------------------------------------------------------------
@@ -230,6 +232,135 @@ check "jump never nudges even on a tty" 0 on_tty "SIMPLEDIR_UPDATE_URL=file://$S
 contains "ls nudges on a tty" "v99.0.0 is out" on_tty "SIMPLEDIR_UPDATE_URL=file://$SIMPLEDIR_CONFIG_DIR/api_new.json '$SD' ls"
 lacks   "opt-out silences the nudge" "is out" on_tty "SIMPLEDIR_NO_UPDATE_CHECK=1 '$SD' ls"
 
+# --- v4: prefix matching on jump ---------------------------------------------
+rm -rf "$SIMPLEDIR_CONFIG_DIR"
+"$SD" add hypr "$HOME" >/dev/null
+"$SD" add hyprland "$HOME" >/dev/null
+"$SD" add kbd "$HOME" >/dev/null
+check "unique prefix jumps"        0 "$SD" jump kbd
+contains "unique prefix resolves"  "$HOME" "$SD" jump kbd
+"$SD" rename hyprland hl >/dev/null
+check "prefix still works after a rename" 0 "$SD" jump hy
+check "exact name beats prefix"   0 "$SD" jump hypr
+check "ambiguous prefix fails"    1 "$SD" jump h
+contains "ambiguous prefix lists them" "hl hypr" "$SD" jump h
+check "unknown name still 404s"   1 "$SD" jump zzzz
+
+# --- v4: add --keep-symlinks -------------------------------------------------
+rm -rf "$SIMPLEDIR_CONFIG_DIR"
+mkdir -p "$SIMPLEDIR_CONFIG_DIR/real"
+ln -sfn "$SIMPLEDIR_CONFIG_DIR/real" "$SIMPLEDIR_CONFIG_DIR/link"
+"$SD" add resolved "$SIMPLEDIR_CONFIG_DIR/link" >/dev/null
+"$SD" add literal --keep-symlinks "$SIMPLEDIR_CONFIG_DIR/link" >/dev/null
+contains "default resolves the symlink" "/real" "$SD" jump resolved
+contains "--keep-symlinks keeps it"      "/link" "$SD" jump literal
+check "both still point at a real dir"  0 "$SD" jump literal
+lacks "no resolve hint when resolved"   "kept the symlink" "$SD" add resolved2 "$SIMPLEDIR_CONFIG_DIR/link"
+
+# --- v4: suggest -------------------------------------------------------------
+rm -rf "$SIMPLEDIR_CONFIG_DIR"
+HIST=$(mktemp -d)
+# a fake HOME, or the developer's real ~/.bash_history leaks into the counts
+mkdir -p "$HIST/home/.config"
+cat > "$HIST/home/.bash_history" <<EOF
+cd $HIST/alpha
+cd $HIST/alpha
+cd $HIST/alpha/sub
+cd $HIST/beta
+cd '$HIST/gamma'
+pushd $HIST/gamma
+cd ~/definitely/not/here
+cd
+cd -
+cd /tmp
+ls -l $HIST/beta
+EOF
+mkdir -p "$HIST/alpha" "$HIST/beta" "$HIST/gamma"
+sexport() { env HOME="$HIST/home" SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" "$@"; }
+
+contains "suggest counts visits"   "2x"  sexport "$SD" suggest
+contains "suggest lists a dir"     "$HIST/alpha" sexport "$SD" suggest
+lacks   "suggest skips non-dirs"  "not/here"     sexport "$SD" suggest
+lacks   "suggest ignores ls -l"    "ls -l"        sexport "$SD" suggest
+contains "suggest emits a bind line" "add alpha $HIST/alpha" sexport "$SD" suggest
+check "suggest --json is valid json" 0 bash -c "env HOME='$HIST/home' SIMPLEDIR_CONFIG_DIR='$SIMPLEDIR_CONFIG_DIR' '$SD' suggest --json | python3 -c 'import json,sys; json.load(sys.stdin)'"
+contains "suggest --top limits"    "top 1" sexport "$SD" suggest --top 1
+lacks   "suggest --top respects it" "$HIST/beta" sexport "$SD" suggest --top 1
+
+contains "suggest --bind creates" "bound 4" sexport "$SD" suggest --bind
+check "suggest --bind wrote aliases" 0 bash -c "'$SD' ls --names | grep -qx alpha"
+contains "suggest knows they're bound" "already bound" sexport "$SD" suggest
+check "suggest exits 0 when all bound" 0 bash -c \
+  "env HOME='$HIST/home' SIMPLEDIR_CONFIG_DIR='$SIMPLEDIR_CONFIG_DIR' '$SD' suggest"
+
+# a history with nothing useful must say so, not crash
+: > "$HIST/home/.bash_history"
+contains "empty history explains itself" 'no `cd` targets' sexport "$SD" suggest
+check "empty history exits 1"       1 sexport "$SD" suggest
+mv "$HIST/home/.bash_history" "$HIST/home/.bash_history.off"
+check "missing history explains itself" 1 sexport "$SD" suggest
+contains "missing history lists where" ".bash_history" sexport "$SD" suggest
+rm -rf "$HIST"
+
+# relative paths are the common case, and `cd` must not match mid-argument
+REL=$(mktemp -d)
+mkdir -p "$REL/home/Projects/one" "$REL/home/Projects/two"
+cat > "$REL/home/.bash_history" <<EOF
+cd Projects
+cd Projects/one
+cd Projects/two
+cd ./Projects/one
+echo cd Projects
+ls Projects
+sudo cd Projects
+cd Projects/one && cd Projects/two
+cd nosuchdir
+EOF
+rel() { env HOME="$REL/home" SIMPLEDIR_CONFIG_DIR="$REL/cfg" "$@"; }
+out=$(rel "$SD" suggest)
+has "relative cd resolves against \$HOME" "$REL/home/Projects/one" "$out"
+has "relative cd counts every visit"    "2x" "$out"
+has "sudo cd counts"                    "$REL/home/Projects" "$out"
+lacks "echo cd is not a cd"             "echo cd" "$out"
+lacks "a nonexistent relative path is skipped" "nosuchdir" "$out"
+rm -rf "$REL"
+
+# --- v4: interactive picker --------------------------------------------------
+rm -rf "$SIMPLEDIR_CONFIG_DIR"
+"$SD" add alpha "$HOME" >/dev/null
+"$SD" add beta /tmp >/dev/null
+STUB=$(mktemp -d)
+printf '#!/usr/bin/env python3\nimport sys\nlines=sys.stdin.read().splitlines()\nprint(lines[0] if lines else "")\n' > "$STUB/fzf"
+chmod +x "$STUB/fzf"
+
+# this machine has a real fzf, so force each branch explicitly
+contains "picker uses fzf when present"  "alpha" env PATH="$STUB:/usr/bin:/bin" SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" "$SD" i
+contains "picker filters"                "alpha" env PATH="$STUB:/usr/bin:/bin" SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" "$SD" i alp
+printf '#!/usr/bin/env bash\nexit 130\n' > "$STUB/fzf"
+check "escape from fzf exits 1"         1 env PATH="$STUB:/usr/bin:/bin" SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" "$SD" i
+
+contains "picker falls back to a list"  "pick a number" bash -c \
+  "printf '2\n' | env SIMPLEDIR_NO_FZF=1 SIMPLEDIR_CONFIG_DIR='$SIMPLEDIR_CONFIG_DIR' '$SD' i"
+contains "picker answers with the name" "beta" bash -c \
+  "printf '2\n' | env SIMPLEDIR_NO_FZF=1 SIMPLEDIR_CONFIG_DIR='$SIMPLEDIR_CONFIG_DIR' '$SD' i"
+contains "picker takes a typed name"    "gamma" bash -c \
+  "printf 'gamma\n' | env SIMPLEDIR_NO_FZF=1 SIMPLEDIR_CONFIG_DIR='$SIMPLEDIR_CONFIG_DIR' '$SD' i"
+check "picker rejects out-of-range"     1 bash -c \
+  "printf '99\n' | env SIMPLEDIR_NO_FZF=1 SIMPLEDIR_CONFIG_DIR='$SIMPLEDIR_CONFIG_DIR' '$SD' i"
+contains "picker explains out-of-range" "no entry 99" bash -c \
+  "printf '99\n' | env SIMPLEDIR_NO_FZF=1 SIMPLEDIR_CONFIG_DIR='$SIMPLEDIR_CONFIG_DIR' '$SD' i"
+check "picker gives up on empty input"  1 bash -c \
+  "printf '\n' | env SIMPLEDIR_NO_FZF=1 SIMPLEDIR_CONFIG_DIR='$SIMPLEDIR_CONFIG_DIR' '$SD' i"
+contains "picker says why it's a list" "SIMPLEDIR_NO_FZF" bash -c \
+  "printf '\n' | env SIMPLEDIR_NO_FZF=1 SIMPLEDIR_CONFIG_DIR='$SIMPLEDIR_CONFIG_DIR' '$SD' i"
+# a PATH with python but no fzf at all
+mkdir -p "$STUB/bare"
+ln -sf "$(command -v python3)" "$STUB/bare/python3"
+contains "picker reports fzf missing" "no fzf installed" bash -c \
+  "printf '\n' | env PATH='$STUB/bare' SIMPLEDIR_CONFIG_DIR='$SIMPLEDIR_CONFIG_DIR' '$SD' i"
+check "picker with nothing to pick"    1 env SIMPLEDIR_CONFIG_DIR="$STUB/empty" "$SD" i
+rm -rf "$STUB"
+
 # --- v3: uninstall -----------------------------------------------------------
 # each scenario gets its own install, because uninstalling deletes the binary
 UNROOT=$(mktemp -d)
@@ -341,7 +472,7 @@ chmod +x "$helper"
 
 check "install.sh installs the binary"  0 env SIMPLEDIR_NO_RC=1 "$helper" "$FAKEHOME/plain"
 check "installed binary is executable"  0 "$FAKEHOME/plain/.local/bin/simpledir" --version
-contains "installer reports the version" "simpledir 3" env SIMPLEDIR_NO_RC=1 "$helper" "$FAKEHOME/again"
+contains "installer reports the version" "simpledir $major" env SIMPLEDIR_NO_RC=1 "$helper" "$FAKEHOME/again"
 check "installed copy matches the repo" 0 bash -c "diff -q '$ROOT/simpledir' '$FAKEHOME/plain/.local/bin/simpledir'"
 check "no staging files left behind"    0 bash -c "! compgen -G '$FAKEHOME/plain/.local/bin/.simpledir.*'"
 
@@ -370,7 +501,7 @@ check "the installed copy reports its version" 0 env -i HOME="$FAKEHOME/withrc" 
   SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" PATH="/usr/bin:/bin" TERM=dumb \
   bash --noprofile --norc -c "
   source '$FAKEHOME/withrc/.bashrc'
-  simpledir --version | grep -q '^simpledir 3'"
+  simpledir --version | grep -q \"^simpledir $major\""
 
 check "re-running refreshes"            0 "$helper" "$FAKEHOME/withrc"
 check "still one marker after re-run" 0 bash -c \

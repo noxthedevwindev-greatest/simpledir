@@ -43,18 +43,28 @@ the positioning.
 9. **`SIMPLEDIR_RC` is exclusive.** when set, `uninstall` and `doctor` touch
    only that file. never widen it to the guessed candidates — a test run once
    removed the wrapper from a real `~/.bashrc` because of exactly that.
+10. **read paths never resolve symlinks.** `as_stored()` is the only thing you
+    call when turning a config value into a path; `normalize()` (which resolves)
+    is for `add`/`import` only. resolving on read silently undoes
+    `--keep-symlinks`.
+11. **history files are logs, not a data format.** `suggest` reads three
+    different formats from three different shells and every one of them will
+    contain junk. parse defensively, never raise, and skip what isn't a
+    directory that exists. `HOME` in a test must point somewhere empty or the
+    developer's real history leaks into the counts.
 
 ## before you touch anything
 
 ```bash
-make test     # 174 assertions, spawns real bash to verify the wrapper
+make test     # 219 assertions, spawns real bash to verify the wrapper
 ```
 
-it must be 174/174 (or more) before you commit. the suite covers the python
+it must be 219/219 (or more) before you commit. the suite covers the python
 side, the JSON config, the actual `cd` behavior of the emitted shell function,
-`install.sh` (package-manager selection, install/uninstall round trip) and the
-whole `update` path against `file://` stubs, so a change to `cmd_init` that looks
-cosmetic can still break a test.
+`install.sh` (package-manager selection, install/uninstall round trip), the
+whole `update` path against `file://` stubs, and `suggest`/`i` against fixtures
+and stub binaries, so the suite still never touches the network or your real
+home directory.
 
 `tests/run.sh` uses a pty via `script -qec` for the two update-nudge checks,
 because the nudge is deliberately suppressed when stderr isn't a terminal.

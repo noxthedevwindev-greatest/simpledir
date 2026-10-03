@@ -35,6 +35,7 @@ cd ~/projects/dotfiles && simpledir add dots    # bind this dir
 sd dots                                         # jump
 simpledir dots                                  # same thing, spelled out
 sd dots/nix                                     # jump into a subdirectory
+sd dot                                          # a unique prefix is enough
 ```
 
 that's the whole idea. names you choose, no scoring algorithm, no database.
@@ -42,6 +43,67 @@ that's the whole idea. names you choose, no scoring algorithm, no database.
 > also here: [`llms.txt`](llms.txt) — a plain-text summary for language models
 > and tools that fetch docs. [`AGENTS.md`](AGENTS.md) — notes for coding agents
 > contributing to this repo.
+
+## getting started when you have nothing
+
+don't know what to name? your shell already wrote down where you go:
+
+```bash
+$ simpledir suggest
+2841 history commands from 1 file(s), 24 distinct directories
+4 already bound, showing the top 3:
+
+     37x  /home/you/Projects/simpledir
+     19x  /home/you/.config/hypr
+      8x  /home/you/src/neovim-config
+
+bind them all:
+  simpledir add simpledir /home/you/Projects/simpledir
+  simpledir add hypr /home/you/.config/hypr
+```
+
+`--bind` does that for you instead of printing it, naming each after its
+directory. this is the best idea in the frecency crowd, minus the database:
+your shell keeps a history file anyway, so read that rather than maintaining a
+second record of the same thing. it understands bash, zsh and fish history, and
+`--json`, `--top N` and `SIMPLEDIR_HISTORY=/path` are there when you want them.
+
+one honest limitation: history is mostly *relative* paths — `cd Projects` —
+and there's no way to know which directory you were standing in when you typed
+it. `suggest` resolves those against `$HOME`, which is right most of the time
+and silently skips the rest. absolute paths are always exact.
+
+or you have a directory of projects:
+
+```bash
+$ simpledir import ~/Projects
+bound 12: dotfiles hyprland nixdots projects simpledir ...
+```
+
+too many to scroll? pick one instead of typing:
+
+```bash
+$ simpledir i
+$ simpledir i hy        # filtered
+```
+
+fzf if it's installed, otherwise a numbered list you answer with a number or a
+name. `SIMPLEDIR_NO_FZF=1` forces the list.
+
+## symlinks
+
+`add` resolves symlinks by default, so `~/dotfiles/current` is stored as whatever
+it points at — which keeps working when you re-point it at a new checkout.
+sometimes you want the opposite, with Nix or a dotfiles repo you switch branches
+in:
+
+```bash
+simpledir add dots --keep-symlinks ~/dotfiles/current
+```
+
+that's zoxide's `_ZO_RESOLVE_SYMLINKS=0` as a flag instead of an environment
+variable. reading an alias never resolves anything, so a path you asked to keep
+symlinked stays symlinked.
 
 ## why not zoxide
 
@@ -57,14 +119,16 @@ a replacement for it. the difference is what each one optimizes for:
 | config you can read and hand-edit | no | yes |
 | moving a dir | move it, forget the alias | `simpledir add -f name /new/path` |
 | installing it | a package manager | `curl … \| bash` |
+| learning where you go | frecency database | reads your shell history |
+| interactive picker | `zi`, needs fzf | `simpledir i`, fzf optional |
 
 **use zoxide** if you wander — frecency scoring is genuinely good and
 reimplementing it would double this tool's size and add a database to a project
 whose whole pitch is "no database".
 
 **use simpledir** if you `cd` to the same dozen places every day and want them
-to have names. it's also the thing you reach for when you *know* the name and
-zoxide would make you guess a substring of it.
+to have names. `suggest` borrows the useful half of the idea without the
+persistence: your shell already logs where you go.
 
 **use both.** they don't conflict — different prefixes, and they can even share
 a name because each keeps its own state.
@@ -106,6 +170,8 @@ simpledir add [<name>] [<path>]  # bind a name. name defaults to the dir's own n
 simpledir rm <name>              # unbind
 simpledir rename <old> <new>     # rename, keep the path
 simpledir import <dir>           # bind every subdirectory of a tree at once
+simpledir suggest                # mine your shell history for dirs worth naming
+simpledir i [<query>]            # interactive picker: fzf if installed
 simpledir ls [<query>] [-l]      # list, optionally filtered by name or path substring
 simpledir ls --names             # one alias per line (for completion scripts)
 simpledir ls --json              # same shape as the config file, for scripts and agents
@@ -121,8 +187,9 @@ simpledir init                   # print the shell wrapper
 and in your shell, `sd` / `simpledir` with no subcommand:
 
 ```bash
-sd dots        # cd to the bound dir
+simpledir dots        # cd to the bound dir
 sd dots/nix    # cd into a subdirectory of it
+sd dot         # a unique prefix is good enough
 sd /some/path  # or just a path, why not
 sd             # -> $HOME
 sd -           # -> previous dir
@@ -188,6 +255,29 @@ simpledir: v3.1.0 is out (you're on v3.0.0). `simpledir update` installs it.
 ```
 
 opt out entirely with `SIMPLEDIR_NO_UPDATE_CHECK=1`.
+
+## what's new in 4.0
+
+four ideas taken from zoxide and autojump, none of which need a database.
+
+**`simpledir suggest`.** reads your shell history, counts the `cd` targets that
+still exist, skips the ones you already bound, and prints a ranked list plus a
+copy-pasteable block of `simpledir add` lines. `--bind` does it for you. handles
+bash, zsh and fish formats, `cd x y`, `pushd`, quoted paths, and `cd -` /
+`~` / non-directories which it correctly ignores.
+
+**`simpledir i`.** the interactive picker, the way zoxide's `zi` works. uses fzf
+when it's installed, falls back to a numbered list you can answer with a number
+or a name. optional query filter.
+
+**`simpledir add --keep-symlinks`.** zoxide's `_ZO_RESOLVE_SYMLINKS=0`, as a flag.
+stores the path as typed instead of resolving it — for Nix stores and dotfiles
+repos you switch branches in. `import` has the flag too.
+
+**prefix matching on jump.** `sd hy` jumps to `hypr` when there's only one
+candidate. two candidates and it refuses, listing them, because guessing between
+two directories is exactly the kind of cleverness that lands you in the wrong
+place.
 
 ## what's new in 3.1
 
@@ -312,7 +402,7 @@ back it up if you want:
 ## development
 
 ```bash
-make test                      # 174 assertions, real bash subprocesses
+make test                      # 219 assertions, real bash subprocesses
 vhs docs/demo.tape             # re-record the gif above
 make assets                    # build dist/ for a release
 make release                   # tag, push, publish with assets attached
