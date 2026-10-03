@@ -1,0 +1,28 @@
+# Maintainer: NoxTheDev <https://github.com/noxthedevwindev-greatest>
+pkgname=simpledir
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Named directory shortcuts for the shell - a database-free zoxide alternative"
+arch=('any')
+url="https://github.com/noxthedevwindev-greatest/simpledir"
+license=('MIT')
+depends=('python')
+optdepends=('bash: shell wrapper')
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+  cd "$srcdir/$pkgname-$pkgver"
+  install -Dm755 simpledir "$pkgdir/usr/bin/simpledir"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
+
+# NOTE: simpledir is pure python and needs no build step, but makepkg
+# expects a prepare() to exist. this one is intentionally empty.
+prepare() {
+  cd "$srcdir/$pkgname-$pkgver"
+  # the shell wrapper is opt-in; install it commented-out so nobody's
+  # bashrc gets mutated by a package upgrade without them asking
+  echo "run 'simpledir init >> ~/.bashrc' to enable sd/simpledir jumping"
+}

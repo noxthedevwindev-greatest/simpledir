@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+*.gif
+!docs/demo.gif
+.DS_Store
