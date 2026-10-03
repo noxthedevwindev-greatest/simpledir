@@ -1,0 +1,105 @@
+# simpledir
+
+> Named directory shortcuts for the shell. The next zoxide: no frecency
+> database, no daemon, no shell-injection. One JSON file of `name -> path`
+> plus a small shell function that performs the `cd`.
+
+A single-file Python 3.8+ command line tool with zero dependencies. It stores
+aliases you name yourself, and jumps to the bound directory. Useful when the
+same dozen directories are visited every day and you want them to have names.
+Complements, does not replace, [zoxide](https://github.com/ajeetdsouza/zoxide).
+
+## Docs
+
+- [README.md](https://github.com/noxthedevwindev-greatest/simpledir/blob/main/README.md): full documentation
+- [AGENTS.md](https://github.com/noxthedevwindev-greatest/simpledir/blob/main/AGENTS.md): notes for coding agents working on this repository
+- [LICENSE](https://github.com/noxthedevwindev-greatest/simpledir/blob/main/LICENSE): MIT
+
+## Install
+
+```
+git clone https://github.com/noxthedevwindev-greatest/simpledir
+cd simpledir && make install
+```
+
+Or manually:
+
+```
+install -Dm755 simpledir ~/.local/bin/simpledir
+simpledir init >> ~/.bashrc
+```
+
+## Commands
+
+```
+simpledir add <name> [path]   bind a name to a directory; path defaults to $PWD; -f overwrites
+simpledir rm <name>           remove an alias
+simpledir ls [-l]             list aliases; -l forces absolute paths
+simpledir jump <name>         print the bound path to stdout, do not cd
+simpledir init                print the shell wrapper to append to a shell rc file
+simpledir <name>              in a shell: jump. elsewhere: same as `jump`
+```
+
+Exit codes: `0` success, `1` unknown alias or user error, `2` argument parsing
+error (argparse).
+
+## Shell wrapper
+
+`sd <name>` and `simpledir <name>` `cd`. This is done by shell functions emitted
+by `simpledir init`, because a subprocess cannot change the calling shell's
+working directory. The `simpledir` function shadows the binary, intercepting only
+bare aliases; `add`, `rm`, `ls`, `jump`, `init` and flags are forwarded to the
+real binary via `command simpledir`.
+
+- `sd` with no arguments: `cd $HOME`
+- `sd -`: `cd $OLDPWD`
+
+Functions rather than shell aliases, because bash expands aliases only in
+interactive shells.
+
+## Configuration
+
+Path: `~/.simpledir/config.json`. Override the directory with the
+`SIMPLEDIR_CONFIG_DIR` environment variable. The file is plain JSON and safe to
+edit by hand.
+
+```json
+{
+  "version": 1,
+  "aliases": {
+    "dots": "/home/you/dotfiles",
+    "hypr": "/home/you/.config/hypr"
+  }
+}
+```
+
+Schema: `version` is an integer, currently `1`. `aliases` maps a non-empty alias
+name to an absolute directory path. Writes are atomic: temporary file plus
+`os.replace`.
+
+## Behavior on errors
+
+- unknown alias: message with substring and `difflib` suggestions, exit `1`
+- alias bound to a deleted directory: `jump` refuses and explains how to rebind;
+  `ls` tags it `[missing]`
+- duplicate alias: refused unless `--force` is given
+- corrupt or unreadable config: explains the problem, suggests removal, does not
+  silently reset
+- `ls` with no aliases: usage hint on stderr, exit `1`
+
+## Development
+
+```
+make test        # 37 assertions, runs real bash subprocesses
+vhs docs/demo.tape   # re-record docs/demo.gif (needs vhs and ttyd)
+```
+
+Repository layout:
+
+```
+simpledir          the entire tool, one executable Python file
+tests/run.sh       test suite, plain bash
+docs/demo.tape     vhs script that produces docs/demo.gif
+packaging/PKGBUILD Arch package definition
+Makefile           install / uninstall / test targets
+```

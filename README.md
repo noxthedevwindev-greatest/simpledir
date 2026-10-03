@@ -22,6 +22,14 @@
 
 ---
 
+**simpledir** is a command line tool that maps names you choose to directories on
+disk, so you can `cd` to a bookmark with `sd <name>`. State is a single JSON file
+at `~/.simpledir/config.json` mapping alias names to absolute paths. The jump is
+performed by a shell function that `simpledir init` appends to your shell rc,
+because a subprocess cannot change the calling shell's working directory. No
+frecency scoring, no database, no daemon, no dependencies — Python 3.8 stdlib
+only.
+
 ```bash
 cd ~/projects/dotfiles && simpledir add dots    # bind this dir
 sd dots                                         # jump
@@ -29,6 +37,10 @@ simpledir dots                                  # same thing, spelled out
 ```
 
 that's the whole idea. names you choose, no scoring algorithm, no database.
+
+> also here: [`llms.txt`](llms.txt) — a plain-text summary for language models
+> and tools that fetch docs. [`AGENTS.md`](AGENTS.md) — notes for coding agents
+> contributing to this repo.
 
 ## why not zoxide
 
@@ -164,6 +176,9 @@ back it up if you want:
 make test                      # 37 assertions, real bash subprocesses
 vhs docs/demo.tape             # re-record the gif above
 ```
+
+working on it with an AI agent? [`AGENTS.md`](AGENTS.md) has the ground rules
+and the map. feeding a doc-fetching tool? [`llms.txt`](llms.txt).
 
 ## license
 
