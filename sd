@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
-"""simpledir - the next zoxide. named directory shortcuts for your shell.
+"""sd - the next zoxide. named directory shortcuts for your shell.
+
+Two commands, one program, split by which name you invoke it as:
+
+  sd      move around. jumping, and anything that only reads the config.
+          never writes it.
+  sdcfg   change things. add, remove, rename, import, and maintenance.
+          never changes directory.
 
 Config lives in ~/.simpledir/config.json as a flat alias -> path map.
-The `jump` subcommand prints a directory on stdout; the shell wrapper
-(see `simpledir init`) does the actual cd.
+The `print` verb prints a directory on stdout; the shell wrapper that
+`sdcfg init` emits performs the cd, because a subprocess cannot change
+the calling shell's cwd.
 """
 
 from __future__ import annotations
@@ -25,17 +33,25 @@ from pathlib import Path
 CONFIG_DIR = Path(os.environ.get("SIMPLEDIR_CONFIG_DIR", Path.home() / ".simpledir"))
 CONFIG_FILE = CONFIG_DIR / "config.json"
 UPDATE_CACHE = CONFIG_DIR / "update-check.json"
-VERSION = "4.0.0"
-PROG = "simpledir"
+VERSION = "5.0.0"
+
+MOVE = "sd"
+CONFIG = "sdcfg"
+# which mode this invocation is: decided by the name it was called as
+MODE = CONFIG if Path(sys.argv[0]).name == CONFIG else MOVE
+PROG = MODE
 
 REPO = "noxthedevwindev-greatest/simpledir"
 RELEASE_API = f"https://api.github.com/repos/{REPO}/releases/latest"
-RELEASE_ASSET = f"https://github.com/{REPO}/releases/latest/download/simpledir"
+RELEASE_ASSET = f"https://github.com/{REPO}/releases/latest/download/sd"
 
 BANNER = f"{PROG} {VERSION} - the next zoxide"
-COMMANDS = (
-    "add", "rm", "rename", "ls", "jump", "edit", "import", "suggest", "i",
-    "update", "uninstall", "doctor", "completions", "init",
+# verbs `sd` answers: they only ever read
+MOVE_VERBS = ("ls", "i", "suggest", "print")
+# verbs `sdcfg` answers: the only things that write or maintain
+CONFIG_VERBS = (
+    "add", "rm", "rename", "import", "edit", "init", "completions",
+    "update", "uninstall", "doctor",
 )
 CHECK_INTERVAL = 86400  # at most one network round trip per day
 
@@ -123,7 +139,7 @@ def resolve(spec: str, aliases: dict) -> str:
     if not name:
         raise UserError(
             f"'{spec}' isn't an alias, it's a path\n"
-            f"  bind it first: {PROG} add <name> {spec}"
+            f"  bind it first: {CONFIG} add <name> {spec}"
         )
 
     if name not in aliases:
@@ -136,7 +152,7 @@ def resolve(spec: str, aliases: dict) -> str:
             if len(matches) > 1:
                 raise UserError(
                     f"'{name}' matches several aliases: " + " ".join(matches) + "\n"
-                    f"  use the whole name, or {PROG} ls"
+                    f"  use the whole name, or {MOVE} ls"
                 )
             raise UserError(suggest(name, aliases))
 
@@ -148,7 +164,7 @@ def resolve(spec: str, aliases: dict) -> str:
         where = f"'{name}'" if not suffix else f"'{spec}'"
         raise UserError(
             f"alias {where} resolves to {target}\n"
-            f"  that directory is gone. fix it: {PROG} add --force {name} <new-path>"
+            f"  that directory is gone. fix it: {CONFIG} add --force {name} <new-path>"
         )
     return target
 
@@ -162,9 +178,9 @@ def suggest(alias: str, aliases: dict) -> str:
     if hits:
         msg += "\n  did you mean: " + ", ".join(hits[:3])
     if not names:
-        msg += f"\n  your config is empty. add one: {PROG} add <name> [path]"
+        msg += f"\n  your config is empty. add one: {CONFIG} add <name> [path]"
     else:
-        msg += f"\n  see them all: {PROG} ls"
+        msg += f"\n  see them all: {MOVE} ls"
     return msg
 
 
@@ -187,7 +203,7 @@ def is_newer(candidate: str, current: str = VERSION) -> bool:
 
 def _fetch(url: str, timeout: float) -> bytes:
     request = urllib.request.Request(
-        url, headers={"User-Agent": f"{PROG}/{VERSION}", "Accept": "application/vnd.github+json"}
+        url, headers={"User-Agent": f"{REPO}/{VERSION}", "Accept": "application/vnd.github+json"}
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read()
@@ -220,15 +236,15 @@ def write_cache(latest: str | None) -> None:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         UPDATE_CACHE.write_text(json.dumps({"checked": int(time.time()), "latest": latest}))
     except OSError:
-        pass  # a read-only home shouldn't break `ls`
+        pass  # a read-only home shouldn't break `sd ls`
 
 
 def install_target() -> Path:
-    """Where `update` should put the new version."""
+    """Where `sdcfg update` should put the new version."""
     override = os.environ.get("SIMPLEDIR_BIN")
     if override:
         return Path(override)
-    standard = Path.home() / ".local/bin/simpledir"
+    standard = Path.home() / ".local/bin/sd"
     if standard.exists():
         return standard  # what install.sh made; don't scribble in a git checkout
     running = Path(sys.argv[0]).resolve()
@@ -257,65 +273,17 @@ def nudge() -> None:
 
     if latest and is_newer(latest):
         print(
-            f"{PROG}: v{latest} is out (you're on v{VERSION}). `{PROG} update` installs it.",
+            f"{PROG}: v{latest} is out (you're on v{VERSION}). `{CONFIG} update` installs it.",
             file=sys.stderr,
         )
 
 
-# -------------------------------------------------------------------------- commands
+# ------------------------------------------------------- reading: sd's half
 
 
-def cmd_add(args: argparse.Namespace) -> int:
-    raw = args.path or os.getcwd()
-    target = normalize(raw, args.keep_symlinks)
-    if not os.path.isdir(target):
-        die(f"not a directory: {target}")
-
-    name = args.name
-    derived = Path(target).name
-    if name is None:
-        # no name given: use the directory's own name. `cd dotfiles && simpledir add`
-        name = derived
-        if not name:
-            die(f"can't derive a name from {target}. usage: {PROG} add <name> [path]")
-
-    data = load()
-    aliases = data["aliases"]
-    if name in aliases and not args.force:
-        die(f"alias '{name}' already exists -> {aliases[name]}\n  overwrite: {PROG} add --force {name} {target}")
-
-    aliases[name] = target
-    save(data)
-    print(f"{name} -> {target}")
-    if derived and name != derived:
-        print(f"  rename it: {PROG} rename {name} <other-name>")
-    if args.keep_symlinks and Path(target).is_symlink():
-        print(f"  kept the symlink: {target}")
-    nudge()
-    return 0
-
-
-def cmd_rm(args: argparse.Namespace) -> int:
-    data = load()
-    aliases = data["aliases"]
-    if args.name not in aliases:
-        die(suggest(args.name, aliases))
-    print(f"removed {args.name} -> {aliases.pop(args.name)}")
-    save(data)
-    return 0
-
-
-def cmd_rename(args: argparse.Namespace) -> int:
-    data = load()
-    aliases = data["aliases"]
-    if args.old not in aliases:
-        die(suggest(args.old, aliases))
-    if args.new in aliases and not args.force:
-        die(f"alias '{args.new}' already exists -> {aliases[args.new]}\n  overwrite: {PROG} rename --force {args.old} {args.new}")
-    target = aliases.pop(args.old)
-    aliases[args.new] = target
-    save(data)
-    print(f"{args.old} -> {args.new} ({target})")
+def cmd_print(args: argparse.Namespace) -> int:
+    """Print a directory. The shell wrapper does the cd."""
+    print(resolve(args.name, load()["aliases"]))
     return 0
 
 
@@ -346,9 +314,9 @@ def cmd_ls(args: argparse.Namespace) -> int:
 
     if not found:
         if aliases and args.query:
-            print(f"nothing matches '{args.query}'. see them all: {PROG} ls", file=sys.stderr)
+            print(f"nothing matches '{args.query}'. see them all: {MOVE} ls", file=sys.stderr)
         else:
-            print(f"no aliases yet. add one: {PROG} add", file=sys.stderr)
+            print(f"no aliases yet. add one: {CONFIG} add", file=sys.stderr)
         return 1
 
     width = max(len(name) for name, _, _ in found)
@@ -369,23 +337,19 @@ def cmd_ls(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_edit(args: argparse.Namespace) -> int:
-    """Open the config in $EDITOR. The JSON is the UI, in the end."""
-    if not CONFIG_FILE.exists():
-        save({"version": 1, "aliases": {}})
-    editor = args.editor or os.environ.get("EDITOR") or os.environ.get("VISUAL") or "vi"
-    argv = shlex.split(editor) + [str(CONFIG_FILE)]
-    try:
-        os.execvp(argv[0], argv)
-    except OSError as exc:
-        die(f"can't run editor {argv[0]!r}: {exc}")
-    return 0  # unreachable unless exec fails silently
+def name_for(path: str, taken=()) -> str:
+    """A decent alias name for a directory: its own name, de-duplicated."""
+    base = Path(path).name or path.strip("/").replace("/", "-")
+    base = re.sub(r"[^A-Za-z0-9._-]", "-", base)
+    name, counter = base, 2
+    while name in taken:
+        name = f"{base}{counter}"
+        counter += 1
+    return name
 
 
-def cmd_jump(args: argparse.Namespace) -> int:
-    aliases = load()["aliases"]
-    print(resolve(args.name, aliases))
-    return 0
+def shell_quote(value: str) -> str:
+    return shlex.quote(value) if re.search(r"[\s'\"$`\\]", value) else value
 
 
 def history_candidates() -> list:
@@ -438,7 +402,10 @@ def history_commands(path: Path) -> list:
 
 
 CD_WORDS = ("cd", "pushd", "z")
-SEPARATORS = {";", "&&", "||", "|", "(", "{", "!", "then", "else", "do", "sudo", "command", "time", "nohup", "time", "builtin"}
+SEPARATORS = {
+    ";", "&&", "||", "|", "(", "{", "!", "then", "else", "do",
+    "sudo", "command", "time", "nohup", "builtin",
+}
 
 
 def cd_targets(command: str) -> list:
@@ -481,17 +448,16 @@ def cd_candidates(raw: str) -> list:
     return [normalize(os.path.join(str(Path.home()), raw))]
 
 
-def cmd_suggest(args: argparse.Namespace) -> int:
-    """Mine your shell history for directories and offer to name them.
+def history_ranked(limit: int | None = None) -> tuple:
+    """(candidates, command count, file count, bound count).
 
-    This is the one genuinely good idea in the frecency crowd, minus the
-    database: your shell already recorded where you go, so read that instead of
-    keeping a second copy of it.
+    Candidates are (path, times-visited), most-visited first, with anything
+    already bound removed.
     """
     files = history_files()
     if not files:
         looked = "\n  ".join(str(p) for p in history_candidates())
-        die(f"no shell history found. looked for:\n  {looked}\ntell me where yours is: SIMPLEDIR_HISTORY=/path/to/history {PROG} suggest")
+        die(f"no shell history found. looked for:\n  {looked}\ntell me where yours is: SIMPLEDIR_HISTORY=/path/to/history {MOVE} suggest")
 
     counts: dict = {}
     commands = 0
@@ -508,62 +474,43 @@ def cmd_suggest(args: argparse.Namespace) -> int:
 
     bound = {as_stored(p) for p in load()["aliases"].values()}
     ranked = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
-    ranked = [(path, n) for path, n in ranked if path not in bound][: args.top]
+    ranked = [(path, n) for path, n in ranked if path not in bound]
+    return (ranked[:limit] if limit else ranked), commands, len(files), len(bound)
+
+
+def cmd_suggest(args: argparse.Namespace) -> int:
+    """Mine your shell history for directories worth naming. Read-only.
+
+    This is the one genuinely good idea in the frecency crowd, minus the
+    database: your shell already recorded where you go, so read that instead of
+    keeping a second copy of it.
+    """
+    ranked, commands, files, bound = history_ranked(args.top)
 
     if not ranked:
-        print(f"every directory in your history is already bound ({len(bound)} aliases)")
+        print(f"every directory in your history is already bound ({bound} aliases)")
         return 0
 
     if args.json:
         print(json.dumps({path: n for path, n in ranked}, indent=2, sort_keys=True))
         return 0
 
-    if args.bind:
-        data = load()
-        aliases = data["aliases"]
-        made = []
-        for path, _ in ranked:
-            name = name_for(path, set(aliases))
-            aliases[name] = path
-            made.append((name, path))
-        save(data)
-        print(f"bound {len(made)}:")
-        for name, path in made:
-            print(f"  {name} -> {path}")
-        print(f"\nrename any of them: {PROG} rename <old> <new>")
-        return 0
-
     width = max(len(path) for path, _ in ranked)
-    print(f"{commands} history commands from {len(files)} file(s), {len(counts)} distinct directories")
-    print(f"{len(bound)} already bound, showing the top {len(ranked)}:\n")
+    print(f"{commands} history commands from {files} file(s), {len(ranked)} new directories")
+    print(f"{bound} already bound, showing the top {len(ranked)}:\n")
     for path, hits in ranked:
         print(f"  {hits:>5}x  {path.ljust(width)}")
-    print("\nbind them all:")
+    print(f"\nbind them all:")
     for path, _ in ranked:
-        print(f"  {PROG} add {name_for(path)} {shell_quote(path)}")
+        print(f"  {CONFIG} add {name_for(path)} {shell_quote(path)}")
     return 0
-
-
-def name_for(path: str, taken=()) -> str:
-    """A decent alias name for a directory: its own name, de-duplicated."""
-    base = Path(path).name or path.strip("/").replace("/", "-")
-    base = re.sub(r"[^A-Za-z0-9._-]", "-", base)
-    name, counter = base, 2
-    while name in taken:
-        name = f"{base}{counter}"
-        counter += 1
-    return name
-
-
-def shell_quote(value: str) -> str:
-    return shlex.quote(value) if re.search(r"[\s'\"$`\\]", value) else value
 
 
 def cmd_pick(args: argparse.Namespace) -> int:
     """Interactive picker. fzf when it's installed, a numbered list when not."""
     found = rows(load()["aliases"], args.query)
     if not found:
-        die("nothing to pick from. add one: " + f"{PROG} add")
+        die(f"nothing to pick from. add one: {CONFIG} add")
 
     entries = [
         (name, target + ("   [missing]" if missing else ""))
@@ -605,6 +552,63 @@ def cmd_pick(args: argparse.Namespace) -> int:
     if answer not in names:
         raise UserError(suggest(answer, load()["aliases"]))
     print(answer)
+    return 0
+
+
+# ------------------------------------------------------- writing: sdcfg's half
+
+
+def cmd_add(args: argparse.Namespace) -> int:
+    raw = args.path or os.getcwd()
+    target = normalize(raw, args.keep_symlinks)
+    if not os.path.isdir(target):
+        die(f"not a directory: {target}")
+
+    name = args.name
+    derived = Path(target).name
+    if name is None:
+        # no name given: use the directory's own name. `cd dotfiles && sdcfg add`
+        name = derived
+        if not name:
+            die(f"can't derive a name from {target}. usage: {CONFIG} add <name> [path]")
+
+    data = load()
+    aliases = data["aliases"]
+    if name in aliases and not args.force:
+        die(f"alias '{name}' already exists -> {aliases[name]}\n  overwrite: {CONFIG} add --force {name} {target}")
+
+    aliases[name] = target
+    save(data)
+    print(f"{name} -> {target}")
+    if derived and name != derived:
+        print(f"  rename it: {CONFIG} rename {name} <other-name>")
+    if args.keep_symlinks and Path(target).is_symlink():
+        print(f"  kept the symlink: {target}")
+    nudge()
+    return 0
+
+
+def cmd_rm(args: argparse.Namespace) -> int:
+    data = load()
+    aliases = data["aliases"]
+    if args.name not in aliases:
+        die(suggest(args.name, aliases))
+    print(f"removed {args.name} -> {aliases.pop(args.name)}")
+    save(data)
+    return 0
+
+
+def cmd_rename(args: argparse.Namespace) -> int:
+    data = load()
+    aliases = data["aliases"]
+    if args.old not in aliases:
+        die(suggest(args.old, aliases))
+    if args.new in aliases and not args.force:
+        die(f"alias '{args.new}' already exists -> {aliases[args.new]}\n  overwrite: {CONFIG} rename --force {args.old} {args.new}")
+    target = aliases.pop(args.old)
+    aliases[new := args.new] = target
+    save(data)
+    print(f"{args.old} -> {args.new} ({target})")
     return 0
 
 
@@ -651,70 +655,49 @@ def cmd_import(args: argparse.Namespace) -> int:
     if skipped:
         print(f"skipped {len(skipped)} already bound: " + " ".join(skipped))
         if not args.force:
-            print(f"  overwrite them: {PROG} import --force {args.directory}")
+            print(f"  overwrite them: {CONFIG} import --force {args.directory}")
     return 0
 
 
-def cmd_update(args: argparse.Namespace) -> int:
-    latest = latest_release(timeout=15)
-    if not latest:
-        die(f"couldn't reach GitHub to check for updates. try again, or see {REPO}")
-
-    print(f"{PROG} {VERSION} installed, newest release is v{latest}")
-    if not is_newer(latest):
-        write_cache(latest)
-        print("you're up to date")
+def cmd_bind_suggested(args: argparse.Namespace) -> int:
+    """Turn `sd suggest`'s output into actual aliases."""
+    ranked, _, _, _ = history_ranked(args.top)
+    if not ranked:
+        print("nothing new in your history to bind")
+        return 0
+    if args.dry_run:
+        print(f"would bind {len(ranked)}: " + " ".join(name_for(p) for p, _ in ranked))
         return 0
 
-    target = install_target()
-    if args.check:
-        print(f"update available: v{latest} (exit 1 means 'there is one')")
-        return 1
+    data = load()
+    aliases = data["aliases"]
+    made = []
+    for path, _ in ranked:
+        name = name_for(path, set(aliases))
+        aliases[name] = path
+        made.append((name, path))
+    save(data)
+    print(f"bound {len(made)}:")
+    for name, path in made:
+        print(f"  {name} -> {path}")
+    print(f"\nrename any of them: {CONFIG} rename <old> <new>")
+    return 0
 
-    if not args.yes:
-        if not sys.stdin.isatty():
-            print(f"  not a terminal, so not asking. install it with: {PROG} update --yes")
-            return 1
-        answer = input(f"  install v{latest} over {target}? [y/N] ").strip().lower()
-        if answer not in ("y", "yes"):
-            print("  ok, leaving it alone")
-            return 0
 
-    url = os.environ.get("SIMPLEDIR_UPDATE_ASSET_URL", RELEASE_ASSET)
+def cmd_edit(args: argparse.Namespace) -> int:
+    """Open the config in $EDITOR. The JSON is the UI, in the end."""
+    if not CONFIG_FILE.exists():
+        save({"version": 1, "aliases": {}})
+    editor = args.editor or os.environ.get("EDITOR") or os.environ.get("VISUAL") or "vi"
+    argv = shlex.split(editor) + [str(CONFIG_FILE)]
     try:
-        blob = _fetch(url, 30)
-    except Exception as exc:
-        die(f"download failed: {exc}")
+        os.execvp(argv[0], argv)
+    except OSError as exc:
+        die(f"can't run editor {argv[0]!r}: {exc}")
+    return 0  # unreachable unless exec fails silently
 
-    # verify what we downloaded before it replaces a working install
-    with tempfile.TemporaryDirectory() as scratch:
-        probe = Path(scratch) / "candidate"
-        probe.write_bytes(blob)
-        probe.chmod(0o755)
-        try:
-            reported = subprocess.run(
-                [str(probe), "--version"], capture_output=True, text=True, timeout=20
-            ).stdout.strip()
-        except (OSError, subprocess.SubprocessError) as exc:
-            die(f"downloaded file isn't runnable: {exc}")
-        if not reported.startswith(f"{PROG} "):
-            die(f"downloaded file isn't {PROG}: {reported or '<no output>'}")
-        new_version = reported.split()[1].lstrip("v")
 
-    if not is_newer(new_version, VERSION):
-        print(f"  asset is v{new_version}, same as what you have. not changing anything")
-        write_cache(new_version)
-        return 0
-
-    target.parent.mkdir(parents=True, exist_ok=True)
-    staged = target.with_name(target.name + f".new.{os.getpid()}")
-    staged.write_bytes(blob)
-    staged.chmod(0o755)
-    os.replace(staged, target)  # atomic: never a half-written binary in your PATH
-    write_cache(new_version)
-    print(f"updated to v{new_version} at {target}")
-    print(f"  new shell needed if {PROG} init gained subcommands")
-    return 0
+# ------------------------------------------------------------- both: maintenance
 
 
 def rc_candidates() -> list:
@@ -775,7 +758,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
 
     if count and not args.purge:
         print(f"you have {count} alias{'es' if count != 1 else ''} in {CONFIG_FILE}")
-        print(f"  these stay. to remove them too: {PROG} uninstall --purge")
+        print(f"  these stay. to remove them too: {CONFIG} uninstall --purge")
 
     if not args.yes:
         if not sys.stdin.isatty():
@@ -835,6 +818,68 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_update(args: argparse.Namespace) -> int:
+    latest = latest_release(timeout=15)
+    if not latest:
+        die(f"couldn't reach GitHub to check for updates. try again, or see {REPO}")
+
+    print(f"{PROG} {VERSION} installed, newest release is v{latest}")
+    if not is_newer(latest):
+        write_cache(latest)
+        print("you're up to date")
+        return 0
+
+    target = install_target()
+    if args.check:
+        print(f"update available: v{latest} (exit 1 means 'there is one')")
+        return 1
+
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print(f"  not a terminal, so not asking. install it with: {CONFIG} update --yes")
+            return 1
+        answer = input(f"  install v{latest} over {target}? [y/N] ").strip().lower()
+        if answer not in ("y", "yes"):
+            print("  ok, leaving it alone")
+            return 0
+
+    url = os.environ.get("SIMPLEDIR_UPDATE_ASSET_URL", RELEASE_ASSET)
+    try:
+        blob = _fetch(url, 30)
+    except Exception as exc:
+        die(f"download failed: {exc}")
+
+    # verify what we downloaded before it replaces a working install
+    with tempfile.TemporaryDirectory() as scratch:
+        probe = Path(scratch) / "candidate"
+        probe.write_bytes(blob)
+        probe.chmod(0o755)
+        try:
+            reported = subprocess.run(
+                [str(probe), "--version"], capture_output=True, text=True, timeout=20
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError) as exc:
+            die(f"downloaded file isn't runnable: {exc}")
+        if not reported.startswith(f"{MOVE} "):
+            die(f"downloaded file isn't {MOVE}: {reported or '<no output>'}")
+        new_version = reported.split()[1].lstrip("v")
+
+    if not is_newer(new_version, VERSION):
+        print(f"  asset is v{new_version}, same as what you have. not changing anything")
+        write_cache(new_version)
+        return 0
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staged = target.with_name(target.name + f".new.{os.getpid()}")
+    staged.write_bytes(blob)
+    staged.chmod(0o755)
+    os.replace(staged, target)  # atomic: never a half-written binary in your PATH
+    write_cache(new_version)
+    print(f"updated to v{new_version} at {target}")
+    print(f"  new shell needed if {MOVE} gained subcommands")
+    return 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     problems = 0
 
@@ -865,11 +910,11 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             ok(f"{len(aliases)} alias{'es' if len(aliases) != 1 else ''}")
             for name, target, missing in rows(aliases):
                 if missing:
-                    bad(f"'{name}' -> {target} is gone. rebind: {PROG} add --force {name} <path>")
+                    bad(f"'{name}' -> {target} is gone. rebind: {CONFIG} add --force {name} <path>")
                 if name != name.strip() or name.startswith("-") or " " in name:
                     bad(f"alias name {name!r} has whitespace or a leading dash")
     else:
-        bad(f"no config yet at {CONFIG_FILE}. create one: {PROG} add")
+        bad(f"no config yet at {CONFIG_FILE}. create one: {CONFIG} add")
 
     print("shell")
     wired = []
@@ -884,7 +929,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             ok(f"wrapper wired into {rc}")
     else:
         target_rc = "~/.zshrc" if "zsh" in os.environ.get("SHELL", "") else "~/.bashrc"
-        bad(f"no shell wrapper found. add it: {PROG} init >> {target_rc}")
+        bad(f"no shell wrapper found. add it: {CONFIG} init >> {target_rc}")
 
     binary_dir = str(install_target().parent)
     if binary_dir in os.environ.get("PATH", "").split(os.pathsep):
@@ -897,7 +942,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     if cached:
         ok(f"last known release: v{cached}")
     else:
-        note(f"never checked. run `{PROG} update --check`")
+        note(f"never checked. run `{CONFIG} update --check`")
     if os.environ.get("SIMPLEDIR_NO_UPDATE_CHECK"):
         note("update checks are disabled (SIMPLEDIR_NO_UPDATE_CHECK)")
 
@@ -912,43 +957,57 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 def cmd_completions(args: argparse.Namespace) -> int:
     if args.shell == "bash":
         print(
-            f"""# {PROG} bash completion. source this, or install it:
-#   {PROG} completions bash > /usr/share/bash-completion/completions/{PROG}
-_{PROG}_complete() {{
+            f"""# simpledir bash completion. install it with:
+#   {CONFIG} completions bash > /usr/share/bash-completion/completions/{MOVE}
+_{MOVE}_complete() {{
   local cur names
   cur="${{COMP_WORDS[COMP_CWORD]}}"
-  names=$(command {PROG} ls --names 2>/dev/null)
+  names=$(command {MOVE} ls --names 2>/dev/null)
   COMPREPLY=( $(compgen -W "$names" -- "$cur") )
   if [[ ${{#COMPREPLY[@]}} -eq 0 && -d "$cur" ]]; then
     # let the shell complete directories too: `sd dots/<tab>`
     COMPREPLY=( $(compgen -d -- "$cur") )
   fi
 }}
-complete -o filenames -F _{PROG}_complete {PROG} sd
+complete -o filenames -F _{MOVE}_complete {MOVE}
+
+_{CONFIG}_complete() {{
+  local cur verbs="add rm rename import bind edit init completions update uninstall doctor"
+  cur="${{COMP_WORDS[COMP_CWORD]}}"
+  COMPREPLY=( $(compgen -W "$verbs" -- "$cur") )
+}}
+complete -F _{CONFIG}_complete {CONFIG}
 """
         )
     else:
         print(
-            f"""#compdef {PROG} sd
-# {PROG} zsh completion. requires compinit; put this in ~/.zshrc:
-#   {PROG} completions zsh > "${{fpath[1]}}/_{PROG}"
+            f"""#compdef {MOVE} {CONFIG}
+# simpledir zsh completion. requires compinit; put this in ~/.zshrc:
+#   {CONFIG} completions zsh > "${{fpath[1]}}/_{MOVE}"
 local -a _sd_aliases
-_sd_aliases=(${{(f)"$(command {PROG} ls --names 2>/dev/null)"}})
+_sd_aliases=(${{(f)"$(command {MOVE} ls --names 2>/dev/null)"}})
 _arguments '1: :->alias' '*: :_files -/'
 if [[ $state == alias ]]; then
   _describe -t aliases 'directory alias' _sd_aliases
 fi
+
+_{CONFIG}() {{
+  local -a verbs=(add rm rename import bind edit init completions update uninstall doctor)
+  _describe -t commands 'sdcfg command' verbs
+}}
+compdef _{CONFIG} {CONFIG}
 """
         )
     return 0
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    bindir = str(Path(shutil.which(PROG) or sys.argv[0]).resolve().parent)
-    passthrough = "|".join((*COMMANDS, "help", "-h", "-V", "--version", "--help"))
+    """Print the wrapper. `sd` cds, so it has to be a function in your shell."""
+    bindir = str(Path(shutil.which(MOVE) or sys.argv[0]).resolve().parent)
+    verbs = "|".join(MOVE_VERBS)
     print(
         f"""# simpledir - the next zoxide. drop this in your shell rc
-if ! command -v {PROG} >/dev/null 2>&1; then
+if ! command -v {MOVE} >/dev/null 2>&1 || ! command -v {CONFIG} >/dev/null 2>&1; then
   case ":$PATH:" in
     *":{bindir}:"*) ;;
     *) export PATH="{bindir}:$PATH" ;;
@@ -956,29 +1015,29 @@ if ! command -v {PROG} >/dev/null 2>&1; then
 fi
 
 # a subprocess can't change this shell's cwd, so the cd happens here.
-_{PROG}_jump() {{
+_sd_jump() {{
   case "${{1-}}" in
     -)  builtin cd -- "$OLDPWD" && return $? ;;
     "") builtin cd -- "$HOME" && return $? ;;
     /* | ~*)  builtin cd -- "$1" && return $? ;;   # sd /some/path just works
   esac
   local _sd_dir
-  _sd_dir=$(command {PROG} jump "$@") || return $?
+  _sd_dir=$(command {MOVE} print "$@") || return $?
   builtin cd -- "$_sd_dir"
 }}
 
-# `sd <alias>` jumps
-sd() {{ _{PROG}_jump "$@"; }}
-
-# `simpledir <alias>` jumps too; subcommands go to the real binary.
-{PROG}() {{
+# `{MOVE}` moves you: anything that isn't a read-only verb is an alias to jump to.
+{MOVE}() {{
   case "${{1-}}" in
-    "" | -)             _{PROG}_jump "$@" ;;
-    {passthrough}) command {PROG} "$@" ;;
-    -?*)                command {PROG} "$@" ;;
-    *)                  _{PROG}_jump "$@" ;;
+    {verbs})  command {MOVE} "$@" ;;                  # ls, i, suggest, print
+    -)        _sd_jump "$@" ;;
+    "")       _sd_jump "$@" ;;
+    -?*)      command {MOVE} "$@" ;;                  # let sd report the bad flag
+    *)        _sd_jump "$@" ;;
   esac
 }}
+
+# `{CONFIG}` changes things and never moves you, so it needs no wrapper.
 """
     )
     return 0
@@ -987,19 +1046,51 @@ sd() {{ _{PROG}_jump "$@"; }}
 # ----------------------------------------------------------------------------- main
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_move_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog=PROG,
-        description="the next zoxide - named directory shortcuts for your shell",
-        epilog="bare `simpledir <alias>` is a shortcut for `simpledir jump <alias>`",
+        prog=MOVE,
+        description="move between directories. this command only reads your config.",
+        epilog=f"to change things, use {CONFIG}: {CONFIG} add, {CONFIG} rm, {CONFIG} import, ...",
     )
-    parser.add_argument("-V", "--version", action="version", version=BANNER)
+    parser.add_argument("--version", action="version", version=BANNER)
+    sub = parser.add_subparsers(dest="cmd")
+
+    p = sub.add_parser("ls", help="list the aliases you can jump to")
+    p.add_argument("query", nargs="?", help="only aliases whose name or path contains this")
+    p.add_argument("--long", action="store_true", help="always print absolute paths")
+    p.add_argument("--names", action="store_true", help="one alias per line, for completion scripts")
+    p.add_argument("--json", action="store_true", dest="json", help="print the same shape as the config file")
+    p.set_defaults(func=cmd_ls)
+
+    p = sub.add_parser("print", help="print the directory for an alias (what `sd` calls)")
+    p.add_argument("name", help="an alias, optionally with a path: `dots/src`")
+    p.set_defaults(func=cmd_print)
+
+    p = sub.add_parser("suggest", help="mine your shell history for directories worth naming")
+    p.add_argument("--top", type=int, default=10, help="how many to show (default 10)")
+    p.add_argument("--json", action="store_true", dest="json", help="print the candidates as JSON")
+    p.set_defaults(func=cmd_suggest)
+
+    p = sub.add_parser("i", help="interactive picker: fzf if installed, numbered list otherwise")
+    p.add_argument("query", nargs="?", help="only consider aliases matching this")
+    p.set_defaults(func=cmd_pick)
+
+    return parser
+
+
+def build_config_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog=CONFIG,
+        description="change your directory shortcuts. this command never moves you.",
+        epilog=f"to move, use {MOVE}: {MOVE} <alias>, {MOVE} ls, {MOVE} i, ...",
+    )
+    parser.add_argument("--version", action="version", version=BANNER)
     sub = parser.add_subparsers(dest="cmd")
 
     p = sub.add_parser("add", help="bind an alias to a directory (defaults: name from the dir, path to $PWD)")
     p.add_argument("name", nargs="?", help="alias name; omit to use the directory's own name")
     p.add_argument("path", nargs="?", help="directory to bind; omit for $PWD")
-    p.add_argument("-f", "--force", action="store_true", help="overwrite an existing alias")
+    p.add_argument("--force", action="store_true", help="overwrite an existing alias")
     p.add_argument(
         "--keep-symlinks",
         action="store_true",
@@ -1014,65 +1105,43 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("rename", help="change an alias's name, keeping its path")
     p.add_argument("old")
     p.add_argument("new")
-    p.add_argument("-f", "--force", action="store_true", help="overwrite an existing alias")
+    p.add_argument("--force", action="store_true", help="overwrite an existing alias")
     p.set_defaults(func=cmd_rename)
 
-    p = sub.add_parser("ls", help="list aliases, optionally filtered by a substring")
-    p.add_argument("query", nargs="?", help="only aliases whose name or path contains this")
-    p.add_argument("-l", "--long", action="store_true", help="always print absolute paths")
-    p.add_argument("--names", action="store_true", help="one alias per line, for completion scripts")
-    p.add_argument("--json", action="store_true", dest="json", help="print the same shape as the config file")
-    p.set_defaults(func=cmd_ls)
+    p = sub.add_parser("import", help="bind every subdirectory of a tree in one shot")
+    p.add_argument("directory", help="tree to walk, e.g. ~/Projects")
+    p.add_argument("--depth", type=int, default=1, help="how many levels to bind (default 1)")
+    p.add_argument("--prefix", default="", help="namespace the names, e.g. `proj-`")
+    p.add_argument("--force", action="store_true", help="overwrite existing aliases")
+    p.add_argument("--hidden", action="store_true", help="include dot-directories")
+    p.add_argument("--dry-run", action="store_true", help="show what would happen, change nothing")
+    p.add_argument("--keep-symlinks", action="store_true", help="store paths as found, not resolved")
+    p.set_defaults(func=cmd_import)
 
-    p = sub.add_parser(
-        "jump",
-        help="print the directory for an alias (a unique name prefix is fine too)",
-    )
-    p.add_argument("name", help="an alias, optionally with a path: `dots/src`")
-    p.set_defaults(func=cmd_jump)
+    p = sub.add_parser("bind", help="create aliases from what `sd suggest` found")
+    p.add_argument("--top", type=int, default=10, help="how many to bind (default 10)")
+    p.add_argument("--dry-run", action="store_true", help="show what would happen, change nothing")
+    p.set_defaults(func=cmd_bind_suggested)
 
     p = sub.add_parser("edit", help="open the config in $EDITOR")
     p.add_argument("editor", nargs="?", help="editor command; defaults to $EDITOR")
     p.set_defaults(func=cmd_edit)
 
-    p = sub.add_parser("import", help="bind every subdirectory of a tree in one shot")
-    p.add_argument("directory", help="tree to walk, e.g. ~/Projects")
-    p.add_argument("-d", "--depth", type=int, default=1, help="how many levels to bind (default 1)")
-    p.add_argument("-p", "--prefix", default="", help="namespace the names, e.g. `proj-`")
-    p.add_argument("-f", "--force", action="store_true", help="overwrite existing aliases")
-    p.add_argument("--hidden", action="store_true", help="include dot-directories")
-    p.add_argument("-n", "--dry-run", action="store_true", help="show what would happen, change nothing")
-    p.add_argument("--keep-symlinks", action="store_true", help="store paths as found, not resolved")
-    p.set_defaults(func=cmd_import)
-
-    p = sub.add_parser(
-        "suggest",
-        help="mine your shell history for directories and offer to name them",
-    )
-    p.add_argument("-n", "--top", type=int, default=10, help="how many to show (default 10)")
-    p.add_argument("--bind", action="store_true", help="actually create the aliases, named after the directories")
-    p.add_argument("--json", action="store_true", dest="json", help="print the candidates as JSON")
-    p.set_defaults(func=cmd_suggest)
-
-    p = sub.add_parser("i", help="interactive picker: fzf if installed, numbered list otherwise")
-    p.add_argument("query", nargs="?", help="only consider aliases matching this")
-    p.set_defaults(func=cmd_pick)
-
     p = sub.add_parser("update", help="check for a newer release and install it")
     p.add_argument("--check", action="store_true", help="only report; exit 1 if an update exists")
-    p.add_argument("-y", "--yes", action="store_true", help="don't ask, just install")
+    p.add_argument("--yes", action="store_true", help="don't ask, just install")
     p.set_defaults(func=cmd_update)
-
-    p = sub.add_parser("doctor", help="check the install: config, dead aliases, shell wiring, PATH")
-    p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser(
         "uninstall",
         help="remove the install: binary and shell wrapper (aliases kept unless --purge)",
     )
     p.add_argument("--purge", action="store_true", help="also delete ~/.simpledir and every alias")
-    p.add_argument("-y", "--yes", action="store_true", help="don't ask, just do it")
+    p.add_argument("--yes", action="store_true", help="don't ask, just do it")
     p.set_defaults(func=cmd_uninstall)
+
+    p = sub.add_parser("doctor", help="check the install: config, dead aliases, shell wiring, PATH")
+    p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("completions", help="print a shell completion script")
     p.add_argument("shell", choices=("bash", "zsh"))
@@ -1086,12 +1155,24 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    # bare `simpledir <alias>` is shorthand for `simpledir jump <alias>`
-    if len(argv) == 1 and argv[0] not in COMMANDS and not argv[0].startswith("-"):
-        argv = ["jump", argv[0]]
+    parser = build_move_parser() if MODE == MOVE else build_config_parser()
 
-    parser = build_parser()
-    args = parser.parse_args(argv)
+    # bare `sd <alias>` is shorthand for `sd print <alias>`
+    if MODE == MOVE and len(argv) == 1 and argv[0] not in MOVE_VERBS and not argv[0].startswith("-"):
+        argv = ["print", argv[0]]
+    elif MODE == MOVE and not argv:
+        argv = ["print", "--help"]
+
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        # the most common mistake with two commands is reaching for the wrong one
+        if exc.code == 2:
+            if MODE == MOVE:
+                print(f"did you mean `{CONFIG} {argv[0]}`? {MOVE} only reads your config.", file=sys.stderr)
+            elif len(argv) == 1 and argv[0] in MOVE_VERBS:
+                print(f"did you mean `{MOVE} {argv[0]}`? {CONFIG} only changes things.", file=sys.stderr)
+        raise
     if not getattr(args, "func", None):
         parser.print_help()
         return 0

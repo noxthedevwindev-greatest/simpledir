@@ -1,12 +1,13 @@
 # simpledir
 
 > Named directory shortcuts for the shell. The next zoxide: no frecency
-> database, no daemon, no shell-injection. One JSON file of `name -> path`
-> plus a small shell function that performs the `cd`.
+> database, no daemon, no dependencies. One JSON file of `name -> path`, and
+> two commands split by what they do to you.
 
-A single-file Python 3.8+ command line tool with zero dependencies. It stores
-aliases you name yourself, and jumps to the bound directory. Useful when the
-same dozen directories are visited every day and you want them to have names.
+`sd` moves you and only ever reads your config. `sdcfg` changes things and never
+changes your directory. Both names are the same file; the program decides which
+half it is by the name it was invoked as (`argv[0]`).
+
 Complements, does not replace, [zoxide](https://github.com/ajeetdsouza/zoxide).
 
 ## Docs
@@ -23,37 +24,51 @@ curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/
 ```
 
 The installer checks for Python 3.8+, installs it with yay, pacman or mise (in
-that order) if missing, downloads the `simpledir` release asset into
-`~/.local/bin`, and appends a guarded wrapper block to `~/.bashrc` or `~/.zshrc`
-(chosen from `$SHELL`). Re-running it refreshes the block and keeps a backup.
-`bash install.sh --uninstall` reverses all of it.
+that order) if missing, downloads the release asset into `~/.local/bin/sd`,
+symlinks `sdcfg` to it, and appends a guarded wrapper block to `~/.bashrc` or
+`~/.zshrc` (chosen from `$SHELL`). Re-running refreshes the block and keeps a
+backup. `bash install.sh --uninstall` reverses all of it.
 
 From source: `git clone … && make install`.
 
 ## Commands
 
+`sd` — moves you, reads the config:
+
 ```
-simpledir add [<name>] [<path>]  bind an alias; name defaults to the directory's basename, path to $PWD; -f overwrites; --keep-symlinks stores the path unresolved
-simpledir rm <name>              remove an alias
-simpledir rename <old> <new>     change an alias's name, keeping its path; -f overwrites
-simpledir import <dir>           bind every subdirectory of a tree; -d/--depth (default 1), -p/--prefix, -f/--force, --hidden, -n/--dry-run, --keep-symlinks
-simpledir suggest                mine shell history for directories to name; -n/--top (default 10), --bind to actually create them, --json
-simpledir i [<query>]            interactive picker; uses fzf when installed, otherwise a numbered list
-simpledir ls [<query>] [-l]      list aliases; <query> filters on name or path substring; -l forces absolute paths
-simpledir ls --names             one alias per line, no padding, for completion scripts
-simpledir ls --json              JSON object of the same shape as the config file
-simpledir jump <alias[/sub]>     print the bound path to stdout, do not cd
-simpledir edit [<editor>]        open the config in $EDITOR (default), creating an empty one if absent
-simpledir update                 check for a newer release, ask, then install it; --check reports only (exit 1 if an update exists); -y/--yes skips the prompt
-simpledir uninstall [--purge]    remove the binary and the shell wrapper block; --purge also deletes ~/.simpledir and every alias; -y/--yes skips the prompt
-simpledir doctor                 report config, dead aliases, shell wiring and PATH problems; exit 1 if any
-simpledir completions bash|zsh   print a shell completion script
-simpledir init                   print the shell wrapper to append to a shell rc file
-simpledir <alias>                in a shell: jump. elsewhere: same as `jump`
+sd <alias>                 jump (equivalent to `sd print <alias>`)
+sd -                       previous directory
+sd                         $HOME
+sd /some/path              a raw path, cd'd as-is
+sd ls [<query>] [--long]   list jumpable aliases; --names one per line; --json the config shape
+sd print <alias[/sub]>     print the directory without cd'ing
+sd suggest [--top N] [--json]   mine shell history for directories worth naming
+sd i [<query>]             interactive picker; fzf if installed, numbered list otherwise
+```
+
+`sdcfg` — changes things, never moves you:
+
+```
+sdcfg add [<name>] [<path>]   bind; name defaults to the directory basename, path to $PWD; --force to overwrite; --keep-symlinks to skip resolution
+sdcfg rm <name>               remove an alias
+sdcfg rename <old> <new>      rename, keeping the path; --force to overwrite
+sdcfg import <dir>            bind every subdirectory of a tree; --depth (default 1), --prefix, --force, --hidden, --dry-run, --keep-symlinks
+sdcfg bind [--top N] [--dry-run]   create aliases from what `sd suggest` found
+sdcfg edit [<editor>]         open the config in $EDITOR, creating an empty one if absent
+sdcfg update                  check for a newer release, ask, then install; --check reports only (exit 1 if one exists); --yes skips the prompt
+sdcfg uninstall               remove the install; --purge also deletes ~/.simpledir and every alias; --yes skips the prompt
+sdcfg doctor                  report config, dead aliases, shell wiring and PATH problems; exit 1 if any
+sdcfg completions bash|zsh    print a shell completion script
+sdcfg init                    print the shell wrapper to append to a shell rc file
 ```
 
 Exit codes: `0` success, `1` unknown alias or user error, `2` argument parsing
 error (argparse).
+
+All flags are long-form only; there are no short aliases.
+
+Reaching for the wrong half is a usage error (exit 2) and gets a pointer:
+`sd add` prints `did you mean 'sdcfg add'? sd only reads your config.`
 
 An alias argument may carry a path suffix: `dots/src` resolves to `<dots>/src`.
 Suffixes are normalized with `normpath`, so `dots/src/..` and `dots/` both work.
@@ -65,7 +80,7 @@ that lists them, never a guess.
 
 ## History mining
 
-`suggest` reads `~/.bash_history`, `~/.zsh_history` and the fish history files
+`sd suggest` reads `~/.bash_history`, `~/.zsh_history` and the fish history files
 (`SIMPLEDIR_HISTORY=/path` adds another file), and understands bash plain lines,
 zsh extended history (`: <time>:<dur>;<cmd>`) and fish (`- cmd: <cmd>`). It
 extracts directories from `cd`, `pushd` and `z`, including `cd a b` and `cd -x /p`,
@@ -75,10 +90,12 @@ directory. `cd` only counts at the start of a command or after a separator
 
 Relative history targets (`cd Projects`) are resolved against `$HOME`, since the
 directory they were typed from is not recorded anywhere. They are skipped when
-that path does not exist. Counts how often each directory appears, drops the ones already bound,
-ranks by frequency, and prints a list plus ready-to-paste `simpledir add` lines.
-`--bind` creates them, naming each after its own directory and de-duplicating
-collisions with a numeric suffix. `--json` prints the candidates as a JSON object.
+that path does not exist.
+
+It counts how often each directory appears, drops the ones already bound, ranks
+by frequency, and prints a list plus ready-to-paste `sdcfg add` lines. `sdcfg
+bind` creates them, naming each after its own directory and de-duplicating
+collisions with a numeric suffix.
 
 ## Symlinks
 
@@ -86,21 +103,6 @@ collisions with a numeric suffix. `--json` prints the candidates as a JSON objec
 stores `os.path.abspath` instead of `Path.resolve()`. Reading an alias always
 uses `as_stored()`, which never resolves: a path bound with `--keep-symlinks`
 stays symlinked for the life of the alias.
-
-## Shell wrapper
-
-`sd <name>` and `simpledir <name>` `cd`. This is done by shell functions emitted
-by `simpledir init`, because a subprocess cannot change the calling shell's
-working directory. The `simpledir` function shadows the binary, intercepting only
-bare aliases; `add`, `rm`, `ls`, `jump`, `init` and flags are forwarded to the
-real binary via `command simpledir`.
-
-- `sd` with no arguments: `cd $HOME`
-- `sd -`: `cd $OLDPWD`
-- `sd dots/src`: `cd` into a subdirectory of a bound alias
-
-Functions rather than shell aliases, because bash expands aliases only in
-interactive shells.
 
 ## Configuration
 
@@ -122,25 +124,66 @@ Schema: `version` is an integer, currently `1`. `aliases` maps a non-empty alias
 name to an absolute directory path. Writes are atomic: temporary file plus
 `os.replace`.
 
+## Shell wrapper
+
+A subprocess cannot change the calling shell's cwd, so `sdcfg init` prints a
+function that performs the `cd`, using `sd print` to resolve the path. The
+function intercepts only bare aliases; `ls`, `print`, `suggest` and `i` are
+forwarded to the binary without changing directory, as is any `-flag`.
+
+- no arguments: `cd $HOME`
+- `-`: `cd $OLDPWD`
+- an absolute path or one starting with `~`: `cd` straight to it
+
+Functions rather than shell aliases, because bash expands aliases only in
+interactive shells.
+
 ## Behavior on errors
 
 - unknown alias: message with substring and `difflib` suggestions, exit `1`
 - alias or alias-with-suffix resolving to a missing directory: `jump` refuses and
   explains how to rebind; `ls` tags it `[missing]`
-- duplicate alias: refused unless `--force` is given, for both `add` and `rename`
+- duplicate alias: refused unless `--force`, for both `add` and `rename`
 - corrupt or unreadable config: explains the problem, suggests removal, does not
   silently reset
 - `ls` with no aliases: usage hint on stderr, exit `1`
 - `ls <query>` with no match: says so, exit `1`
-- unknown flag: argparse usage error, exit `2`
+- unknown flag, or a verb belonging to the other command: argparse usage error,
+  exit `2`, with a pointer to the right command
 - `update` when GitHub is unreachable: says so, exit `1`
 - `update` never replaces a binary with a same-version or unidentifiable download
 - `uninstall` without a terminal and without `--yes`: refuses rather than
   guessing, exit `1`
 
+## Update mechanism
+
+`update` fetches `https://api.github.com/repos/noxthedevwindev-greatest/simpledir/releases/latest`,
+compares `tag_name` against `VERSION`, and on a newer tag downloads the release
+asset `sd`, runs it with `--version` to confirm identity and version, then
+writes it next to the target and `os.replace`s it into place.
+
+Additionally, `sd ls` and `sdcfg add` may print a one-line nudge to stderr when a
+newer release is known. It is suppressed when stderr is not a terminal, when
+`SIMPLEDIR_NO_UPDATE_CHECK` is set, when the cache in
+`~/.simpledir/update-check.json` is younger than 24 hours, and never on the
+`sd print` path.
+
+Environment variables:
+
+```
+SIMPLEDIR_CONFIG_DIR       config directory                (default ~/.simpledir)
+SIMPLEDIR_NO_UPDATE_CHECK  set to anything to disable update checks
+SIMPLEDIR_BIN              override the path `update` writes to, and `uninstall` removes
+SIMPLEDIR_RC               the only rc file `uninstall` and `doctor` will touch
+SIMPLEDIR_HISTORY          an extra history file for `sd suggest` to read
+SIMPLEDIR_NO_FZF           set to anything to make `sd i` skip fzf
+SIMPLEDIR_UPDATE_URL       override the release API URL (used by the test suite)
+SIMPLEDIR_UPDATE_ASSET_URL override the downloaded asset URL (used by the test suite)
+```
+
 ## Uninstall
 
-`simpledir uninstall` removes the binary at `install_target()` and strips every
+`sdcfg uninstall` removes the binary at `install_target()` and strips every
 `# >>> simpledir >>>` … `# <<< simpledir <<<` span from the rc files in
 `rc_candidates()`, rewriting each through a staged file and leaving a
 `<rc>.bak.<timestamp>` backup. Aliases in `~/.simpledir` are preserved unless
@@ -150,56 +193,30 @@ name to an absolute directory path. Writes are atomic: temporary file plus
 Without it, candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc`
 and `~/.config/fish/config.fish`.
 
-## Update mechanism
-
-`update` fetches `https://api.github.com/repos/noxthedevwindev-greatest/simpledir/releases/latest`,
-compares `tag_name` against `VERSION`, and on a newer tag downloads the release
-asset `simpledir`, runs it with `--version` to confirm identity and version, then
-writes it next to the target and `os.replace`s it into place.
-
-Additionally, `add` and `ls` may print a one-line nudge to stderr when a newer
-release is known. It is suppressed when stderr is not a terminal, when
-`SIMPLEDIR_NO_UPDATE_CHECK` is set, when the cache in
-`~/.simpledir/update-check.json` is younger than 24 hours, and never on the
-`jump` path.
-
-Environment variables:
-
-```
-SIMPLEDIR_CONFIG_DIR       config directory                (default ~/.simpledir)
-SIMPLEDIR_NO_UPDATE_CHECK  set to anything to disable update checks
-SIMPLEDIR_BIN              override the path `update` writes to, and `uninstall` removes
-SIMPLEDIR_RC               the only rc file `uninstall` and `doctor` will touch
-SIMPLEDIR_HISTORY          an extra history file for `suggest` to read
-SIMPLEDIR_NO_FZF           set to anything to make `simpledir i` skip fzf
-SIMPLEDIR_UPDATE_URL       override the release API URL (used by the test suite)
-SIMPLEDIR_UPDATE_ASSET_URL override the downloaded asset URL (used by the test suite)
-```
-
 ## Version history
 
+- 5.0.0 — split into two commands: `sd` (moves, read-only) and `sdcfg` (writes,
+  never moves). Long-form flags only; the short forms are gone. `suggest --bind`
+  became `sdcfg bind`. Breaking change to the command surface; the config format
+  is unchanged at `version: 1`.
 - 4.0.0 — `suggest` (history mining), `i` (interactive picker, fzf optional),
   `add`/`import --keep-symlinks`, and unique-prefix matching on jump. Reading an
-  alias no longer resolves symlinks. Config format unchanged at `version: 1`.
-- 3.1.0 — `uninstall`: the tool removes its own binary and the wrapper block
-  from shell rc, keeping aliases unless `--purge`. `install.sh --uninstall` now
-  delegates to it. Config format unchanged at `version: 1`.
-- 3.0.0 — one-command `curl | bash` installer that resolves python through
-  yay/pacman/mise, `update` with verification and atomic self-install, a quiet
-  once-a-day update nudge, `import` for bulk binding, `doctor` for install
-  health, and downloadable release assets. Config format unchanged at
-  `version: 1`.
-- 2.0.0 — path suffixes on alias arguments, `rename`, `add` with fewer
-  arguments, `edit`, `ls` filtering, `ls --names`, `ls --json`, shell
-  completions. Config format unchanged at `version: 1`.
+  alias no longer resolves symlinks.
+- 3.1.0 — `uninstall`: removes its own binary and the wrapper block, keeping
+  aliases unless `--purge`.
+- 3.0.0 — one-command `curl | bash` installer, `update` with verification and
+  atomic self-install, a quiet once-a-day update nudge, `import`, `doctor`,
+  downloadable release assets.
 - 1.0.0 — `add`, `rm`, `ls`, `jump`, `init`, the shell wrapper, typo
   suggestions, atomic config writes.
+- 2.0.0 — path suffixes, `rename`, `add` with fewer arguments, `edit`, `ls`
+  filtering, `--names`, `--json`, shell completions.
 
 ## Development
 
 ```
-make test     # 219 assertions, runs real bash subprocesses
-make assets   # build dist/ (simpledir + install.sh, mode 755)
+make test     # 235 assertions, runs real bash subprocesses
+make assets   # build dist/ (sd + install.sh, mode 755)
 make release  # tag from VERSION, push, publish with assets
 vhs docs/demo.tape   # re-record docs/demo.gif (needs vhs and ttyd)
 ```
@@ -207,10 +224,11 @@ vhs docs/demo.tape   # re-record docs/demo.gif (needs vhs and ttyd)
 Repository layout:
 
 ```
-simpledir          the entire tool, one executable Python file
+sd                 the entire tool, one executable file. installed as `sd` with `sdcfg` symlinked to it
 install.sh         the curl | bash installer
 tests/run.sh       test suite, plain bash
 docs/demo.tape     vhs script that produces docs/demo.gif
 packaging/PKGBUILD Arch package definition
+packaging/nix/     a nixpkgs expression
 Makefile           install / uninstall / test / assets / release targets
 ```

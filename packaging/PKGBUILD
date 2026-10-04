@@ -1,14 +1,15 @@
 # Maintainer: NoxTheDev <https://github.com/noxthedevwindev-greatest>
 # Contributor: Your Name <you@example.com>
 pkgname=simpledir
-pkgver=4.0.0
+pkgver=5.0.0
 pkgrel=1
 pkgdesc="Named directory shortcuts for the shell - a database-free zoxide alternative"
 arch=('any')
 url="https://github.com/noxthedevwindev-greatest/simpledir"
 license=('MIT')
 depends=('python')
-optdepends=('bash: shell wrapper for bash' 'zsh: shell wrapper for zsh')
+optdepends=('bash: shell wrapper for bash' 'zsh: shell wrapper for zsh'
+            'fzf: interactive picker for `sd i`')
 # a git source with a pinned tag: bump pkgver, push the tag, and the AUR
 # package follows. SKIP is only valid for VCS sources, which is the point.
 source=("$pkgname::git+https://github.com/noxthedevwindev-greatest/simpledir.git#tag=v$pkgver")
@@ -16,16 +17,19 @@ sha256sums=('SKIP')
 
 package() {
   cd "$srcdir/$pkgname"
-  install -Dm755 simpledir "$pkgdir/usr/bin/simpledir"
+  # one file, two commands. the program picks its half from argv[0], so the
+  # second name is a symlink rather than a second copy.
+  install -Dm755 sd "$pkgdir/usr/bin/sd"
+  ln -s sd "$pkgdir/usr/bin/sdcfg"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
   install -Dm644 llms.txt "$pkgdir/usr/share/doc/$pkgname/llms.txt"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
 
-# simpledir is pure python: no build step, no bytecode compilation needed.
+# pure python: no build step, no bytecode compilation needed.
 # the shell wrapper is opt-in, so print how to enable it rather than editing
 # anybody's bashrc from a post-install script.
 post_install() {
-  echo "run 'simpledir init >> ~/.bashrc' (or ~/.zshrc) to enable sd / simpledir"
-  echo "run 'simpledir doctor' afterwards to confirm"
+  echo "run 'sdcfg init >> ~/.bashrc' (or ~/.zshrc) to enable 'sd'"
+  echo "run 'sdcfg doctor' afterwards to confirm"
 }

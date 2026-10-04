@@ -7,19 +7,20 @@
 #   curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/main/install.sh | bash
 #
 # environment overrides:
-#   SIMPLEDIR_BIN_DIR   where to put the binary          (default ~/.local/bin)
-#   SIMPLEDIR_RC        which rc file to patch           (default ~/.zshrc or ~/.bashrc)
+#   SIMPLEDIR_BIN_DIR   where to put the binaries          (default ~/.local/bin)
+#   SIMPLEDIR_RC        which rc file to patch              (default ~/.zshrc or ~/.bashrc)
 #   SIMPLEDIR_PM        force a package manager: yay | pacman | mise
-#   SIMPLEDIR_NO_RC=1   install the binary, don't touch the rc
-#   SIMPLEDIR_RELEASE_URL  where to fetch the tool from  (default: the latest release asset)
-#   SIMPLEDIR_RAW_URL      fallback source              (default: the file on main)
+#   SIMPLEDIR_NO_RC=1   install the binaries, don't touch the rc
+#   SIMPLEDIR_RELEASE_URL  where to fetch the tool from     (default: the latest release asset)
+#   SIMPLEDIR_RAW_URL      fallback source                 (default: the file on main)
 #
 set -euo pipefail
 
 OWNER="noxthedevwindev-greatest"
 REPO="simpledir"
 BIN_DIR="${SIMPLEDIR_BIN_DIR:-$HOME/.local/bin}"
-BIN="$BIN_DIR/simpledir"
+SD="$BIN_DIR/sd"
+SDCFG="$BIN_DIR/sdcfg"
 MARK_BEGIN="# >>> simpledir >>>"
 MARK_END="# <<< simpledir <<<"
 
@@ -28,7 +29,7 @@ warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
 
 usage() {
-  sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 validate_pm() {
@@ -88,20 +89,20 @@ install_python() {
   python_ok || die "python 3.8+ still isn't on PATH. open a new shell and re-run this script."
 }
 
-# ------------------------------------------------------------------ the binary
+# ------------------------------------------------------------------- the tool
 
 fetch() { # fetch > path ; tries the latest release asset, falls back to main
   local url out
   for url in \
-    "${SIMPLEDIR_RELEASE_URL:-https://github.com/$OWNER/$REPO/releases/latest/download/simpledir}" \
-    "${SIMPLEDIR_RAW_URL:-https://raw.githubusercontent.com/$OWNER/$REPO/main/simpledir}"
+    "${SIMPLEDIR_RELEASE_URL:-https://github.com/$OWNER/$REPO/releases/latest/download/sd}" \
+    "${SIMPLEDIR_RAW_URL:-https://raw.githubusercontent.com/$OWNER/$REPO/main/sd}"
   do
     out=$(mktemp)
     chmod 755 "$out"
     if curl -fsSL --retry 2 --connect-timeout 10 "$url" -o "$out" 2>/dev/null; then
       # refuse anything that isn't our tool: a 404 page or an html error would
       # otherwise get chmod +x'd into your PATH
-      if "$out" --version >/dev/null 2>&1 && "$out" --version 2>/dev/null | grep -q '^simpledir '; then
+      if "$out" --version >/dev/null 2>&1 && "$out" --version 2>/dev/null | grep -q '^sd '; then
         printf '%s' "$out"
         return 0
       fi
@@ -112,7 +113,7 @@ fetch() { # fetch > path ; tries the latest release asset, falls back to main
   return 1
 }
 
-install_binary() {
+install_tool() {
   local fetched
   info "downloading simpledir"
   fetched=$(fetch) || die "could not download simpledir. check your network and try again."
@@ -120,13 +121,17 @@ install_binary() {
   mkdir -p "$BIN_DIR"
   # write into the target directory, then rename: never a half-written binary
   local staged
-  staged=$(mktemp "$BIN_DIR/.simpledir.XXXXXX")
+  staged=$(mktemp "$BIN_DIR/.sd.XXXXXX")
   cat "$fetched" > "$staged"
   chmod 755 "$staged"
-  mv -f "$staged" "$BIN"
+  mv -f "$staged" "$SD"
   rm -f "$fetched"
 
-  info "installed $BIN ($("$BIN" --version))"
+  # one file, two names. the program decides what it is by argv[0], so a
+  # symlink is all the second name needs.
+  ln -sfn sd "$SDCFG"
+
+  info "installed $SD and $SDCFG ($("$SD" --version))"
 }
 
 # ----------------------------------------------------------------- the rc file
@@ -140,6 +145,10 @@ pick_rc() {
     */zsh) printf '%s' "${ZDOTDIR:-$HOME}/.zshrc" ;;
     *)     printf '%s' "$HOME/.bashrc" ;;
   esac
+}
+
+marker_pattern() { # escape the marker for use as a sed address
+  printf '%s' "$1" | sed 's/[][\.*^$/]/\\&/g'
 }
 
 wire_rc() {
@@ -158,12 +167,12 @@ wire_rc() {
     cp -p "$rc" "$backup"
     local kept
     kept=$(mktemp)
-    sed "/$(printf '%s' "$MARK_BEGIN" | sed 's/[][\.*^$/]/\\&/g')/,/$(printf '%s' "$MARK_END" | sed 's/[][\.*^$/]/\\&/g')/d" "$rc" > "$kept"
-    { cat "$kept"; echo; echo "$MARK_BEGIN"; "$BIN" init; echo "$MARK_END"; } > "$rc"
+    sed "/$(marker_pattern "$MARK_BEGIN")/,/$(marker_pattern "$MARK_END")/d" "$rc" > "$kept"
+    { cat "$kept"; echo; echo "$MARK_BEGIN"; "$SDCFG" init; echo "$MARK_END"; } > "$rc"
     rm -f "$kept"
     info "refreshed the wrapper block in $rc (old one in $backup)"
   else
-    { echo; echo "$MARK_BEGIN"; "$BIN" init; echo "$MARK_END"; } >> "$rc"
+    { echo; echo "$MARK_BEGIN"; "$SDCFG" init; echo "$MARK_END"; } >> "$rc"
     info "added the wrapper to $rc"
   fi
 
@@ -176,21 +185,20 @@ wire_rc() {
 
 uninstall() {
   # prefer the tool's own uninstaller: one implementation of "what to remove".
-  # SIMPLEDIR_RC keeps it to this installerrc file and nothing else.
+  # SIMPLEDIR_RC keeps it to this installer's rc file and nothing else.
   local rc; rc=$(pick_rc)
-  if [ -x "$BIN" ]; then
-    if SIMPLEDIR_RC="$rc" "$BIN" uninstall --yes; then
+  if [ -x "$SD" ]; then
+    if SIMPLEDIR_RC="$rc" "$SDCFG" uninstall --yes; then
       return 0
     fi
     warn "simpledir uninstall exited non-zero, falling back to doing it by hand"
   fi
 
   # fall back to doing it by hand, for when the binary is already gone or broken
-  command -v simpledir >/dev/null 2>&1 && info "removing $BIN"
-  rm -f "$BIN"
+  rm -f "$SD" "$SDCFG"
   if [ -f "$rc" ] && grep -qF "$MARK_BEGIN" "$rc"; then
     cp -p "$rc" "$rc.bak.$(date +%Y%m%d%H%M%S)"
-    sed "/$(printf '%s' "$MARK_BEGIN" | sed 's/[][\.*^$/]/\\&/g')/,/$(printf '%s' "$MARK_END" | sed 's/[][\.*^$/]/\\&/g')/d" "$rc" > "$rc.tmp"
+    sed "/$(marker_pattern "$MARK_BEGIN")/,/$(marker_pattern "$MARK_END")/d" "$rc" > "$rc.tmp"
     mv -f "$rc.tmp" "$rc"
     info "removed the wrapper block from $rc"
   fi
@@ -217,19 +225,21 @@ else
   info "python $(python_ver) ready"
 fi
 
-install_binary
+install_tool
 wire_rc
 
 cat <<EOF
 
-  simpledir is installed.
+  simpledir is installed. two commands:
 
-    simpledir add <name>     bind the current directory
-    sd <name>                jump to it
+    sd <alias>           jump there
+    sd ls                list what you can jump to
+    sdcfg add <name>     bind the current directory
+    sdcfg import ~/Projects
 
   open a new shell (or run: source $(pick_rc)) and try:
 
-    cd ~ && simpledir add home && simpledir ls
+    cd ~ && sdcfg add home && sd ls
 
   docs: https://github.com/$OWNER/$REPO
 EOF
