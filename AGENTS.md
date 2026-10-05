@@ -159,8 +159,15 @@ one feature set per release, so the notes are a list of what a user can now do.
 
 ```bash
 make test
-make release        # reads VERSION from sd.cpp, tags, pushes, publishes, uploads dist/
+make audit-tags     # every tag must match the version its commit declares
+make release        # test + audit-tags + assets, then tags, pushes, publishes
 ```
+
+**`audit-tags` is not optional.** the v1.0.0 tag pointed one commit late, at the
+bump to 2.0.0, so `sdcfg update --to v1.0.0` installed a program that called
+itself 2.0.0. it survived four releases because every test stubbed the thing that
+would have noticed, and nothing compared a tag to the version string inside the
+commit it points at. tag the commit that *declares* the version, and check.
 
 or by hand:
 
@@ -175,7 +182,12 @@ gh release create v6.1.0 --title "v6.1.0" --notes "..." dist/sd-linux-x86_64 dis
 - **prerelease** (`v6.2.0-rc.1`, `--prerelease`) — for a feature you're still
   changing the shape of. `update`'s version comparison only accepts `x.y.z` tags,
   so nobody gets yanked onto half-finished work.
-- keep `VERSION` in `sd.cpp`, the tag, and the release title in sync.
+- keep `VERSION` in `sd.cpp`, the tag, and the release title in sync — and the
+  tag must point at a commit whose own `VERSION` already says that number, not at
+  the commit after it. `make audit-tags` checks all of them at once.
+- if a tag really is wrong, retag it (`git tag -f -a vX.Y.Z <commit>`) rather than
+  editing the version string: a published tag that lies is worse than a moved one,
+  and moving it back to an ancestor loses no history.
 - the release title starts with the version, then a short hook: `v6.1.0 — one
   curl and you're done`.
 - assets are `sd-linux-<arch>` (the binary), `sd.cpp` and `install.sh`, all mode

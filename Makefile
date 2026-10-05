@@ -8,7 +8,7 @@ ASSETS ?= $(ASSET) sd.cpp install.sh
 
 CXXFLAGS ?= -std=c++17 -O2 -static-libstdc++ -static-libgcc
 
-.PHONY: all binaries install uninstall test assets release clean
+.PHONY: all binaries install uninstall test assets release audit-tags clean
 
 all: binaries
 
@@ -67,7 +67,7 @@ assets: sd
 	@ls -l dist
 	@./sd --version
 
-release: test assets
+release: test audit-tags assets
 	@version=$$(sed -n 's/^#define VERSION "\(.*\)"/\1/p' sd.cpp); \
 	echo "releasing v$$version"; \
 	test -n "$$version" || { echo "could not read VERSION"; exit 1; }; \
@@ -77,6 +77,23 @@ release: test assets
 
 test:
 	bash tests/run.sh
+
+# Every tag must point at a commit whose own version string matches the tag. The
+# v1.0.0 tag pointed one commit late, at the bump to 2.0.0, so `update --to v1.0.0`
+# installed a program that called itself 2.0.0 — for four releases, unnoticed,
+# because nothing ever compared the two. Run this before tagging.
+audit-tags:
+	@fail=0; for t in $$(git tag | sort -V); do \
+		c=$$(git rev-list -n1 $$t); \
+		v=$$(git show $$c:sd.cpp 2>/dev/null | sed -n 's/^#define VERSION "\(.*\)"/\1/p' | head -1); \
+		if [ -z "$$v" ]; then v=$$(git show $$c:sd 2>/dev/null | sed -n 's/^VERSION = "\(.*\)"/\1/p' | head -1); fi; \
+		if [ -z "$$v" ]; then v=$$(git show $$c:simpledir 2>/dev/null | sed -n 's/^VERSION = "\(.*\)"/\1/p' | head -1); fi; \
+		want=$${t#v}; \
+		if [ "$$v" = "$$want" ]; then printf '  %-9s ok\n' "$$t"; \
+		else printf '  %-9s MISMATCH: tag says %s, that commit says %s\n' "$$t" "$$want" "$${v:-nothing}"; fail=1; fi; \
+	done; \
+	if [ $$fail -ne 0 ]; then echo "a tag points at the wrong commit. fix the tag, not the version."; exit 1; fi; \
+	echo "every tag matches its commit"
 
 clean:
 	rm -f sd sdcfg
