@@ -274,6 +274,13 @@ want there anyway.
 tested on bash 5.2. the wrapper only uses portable constructs, so zsh should be
 fine, but that's untested — tell me if it breaks.
 
+## what's new in 6.3
+
+your config file was mode `744` — executable. `write_atomic` asked for
+`fs::perms::owner_all` on the non-executable path, and `owner_all` includes the
+`x` bit. `config.json` and `history.json` now come out `644`, which is what a
+data file should be.
+
 ## what's new in 6.2
 
 **the update check had never worked. not once.** two bugs, stacked, both
@@ -473,7 +480,7 @@ else with `SIMPLEDIR_BIN=/path/to/sd`.
 
 ```bash
 make                # build: one g++ invocation over one file
-make test           # 331 assertions, real bash subprocesses, no network
+make test           # 334 assertions, real bash subprocesses, no network
 make assets         # dist/ for a release: the binary, sd.cpp, install.sh
 make release        # tag, push, publish with assets attached
 vhs docs/demo.tape  # re-record the gif above (needs vhs + ttyd)

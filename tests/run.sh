@@ -347,6 +347,17 @@ EDITOR=true check "edit with a no-op editor" 0 "$CFG" edit
 EDITOR=/nonexistent-binary-xyz check "edit reports bad editor" 1 "$CFG" edit
 contains "edit created a config" '"aliases"' cat "$SIMPLEDIR_CONFIG_DIR/config.json"
 
+# a data file must not be executable. write_atomic used fs::perms::owner_all for
+# the non-executable case, which includes the x bit, so config.json came out 0744
+check "config.json is not executable" 0 bash -c \
+  "[[ ! -x '$SIMPLEDIR_CONFIG_DIR/config.json' ]]"
+check "config.json is readable by others" 0 bash -c \
+  "[[ \$(stat -c '%a' '$SIMPLEDIR_CONFIG_DIR/config.json') == 644 ]]"
+"$CFG" add permcheck /tmp >/dev/null
+check "the mode survives a rewrite" 0 bash -c \
+  "[[ \$(stat -c '%a' '$SIMPLEDIR_CONFIG_DIR/config.json') == 644 ]]"
+"$CFG" rm permcheck >/dev/null
+
 # --- config v1 -> v2, `sdcfg migrate` ----------------------------------------
 # `migrate` moves the config file. `update` replaces the program. neither calls
 # the other, and the names are one character apart, so both get their own tests.

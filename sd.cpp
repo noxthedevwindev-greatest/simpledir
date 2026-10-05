@@ -46,7 +46,7 @@
 namespace fs = std::filesystem;
 
 #ifndef VERSION
-#define VERSION "6.2.0"
+#define VERSION "6.3.0"
 #endif
 #define CONFIG_VERSION 2
 
@@ -311,12 +311,16 @@ void write_atomic(const std::string& path, const std::string& data, bool executa
     out.flush();
     if (!out) throw UserError("can't write " + tmp);
   }
-  fs::permissions(tmp, executable ? fs::perms::owner_all | fs::perms::group_read |
-                                        fs::perms::group_exec | fs::perms::others_read |
-                                        fs::perms::others_exec
-                                  : fs::perms::owner_all | fs::perms::group_read |
-                                        fs::perms::others_read,
-            fs::perm_options::replace, ec);
+  // owner_all includes the execute bit, which is how every file this tool writes
+  // ended up 0744 and config.json came out executable. be explicit about which
+  // bits are wanted instead of reaching for a convenient bundle.
+  fs::perms mode = fs::perms::owner_read | fs::perms::owner_write;
+  if (executable)
+    mode |= fs::perms::owner_exec | fs::perms::group_read | fs::perms::group_exec |
+           fs::perms::others_read | fs::perms::others_exec;
+  else
+    mode |= fs::perms::group_read | fs::perms::others_read;
+  fs::permissions(tmp, mode, fs::perm_options::replace, ec);
   fs::rename(tmp, path, ec);
   if (ec) {
     fs::remove(tmp);
