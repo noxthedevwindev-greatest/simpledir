@@ -274,6 +274,44 @@ want there anyway.
 tested on bash 5.2. the wrapper only uses portable constructs, so zsh should be
 fine, but that's untested — tell me if it breaks.
 
+## what's new in 7.0
+
+**your prompt can show how you got there.** one line in your rc and the alias you
+jumped by appears in your prompt, coloured, the way Starship shows the project and
+branch:
+
+```bash
+eval "$(sdcfg prompt bash)"     # or zsh
+```
+
+```
+dots ❯ cd dotfiles/hypr
+```
+
+```
+❯ sd dots
+dots ❯
+```
+
+the interesting part is what happens when you `cd` somewhere by hand. the segment
+disappears, with no hook and no overridden `cd`, because `sd` records both the
+alias *and* the directory it landed in, and the prompt only draws the marker while
+`$PWD` still matches. move somewhere else and it stops matching on its own.
+
+`suffix` jumps show what you typed (`dots/hypr`), `sd -` and raw paths clear it,
+and a jump that fails leaves nothing behind.
+
+colour it with `SD_PROMPT_COLOR`:
+
+```bash
+SD_PROMPT_COLOR="38;5;213"     # a more lurid one
+```
+
+zsh is supported (`sdcfg prompt zsh`, via `precmd_functions`) but has not been run
+on this machine — there is no zsh here — so it is shape-tested only. bash is
+tested for real, including that calling the hook twice doesn't stack two copies of
+the segment.
+
 ## what's new in 6.5
 
 going back past v6.0.0 now hands you a way back that needs **nothing**:
@@ -520,7 +558,7 @@ else with `SIMPLEDIR_BIN=/path/to/sd`.
 
 ```bash
 make                # build: one g++ invocation over one file
-make test           # 348 assertions, real bash subprocesses, no network
+make test           # 372 assertions, real bash subprocesses, no network
 make assets         # dist/ for a release: the binary, sd.cpp, install.sh
 make release        # tag, push, publish with assets attached
 vhs docs/demo.tape  # re-record the gif above (needs vhs + ttyd)

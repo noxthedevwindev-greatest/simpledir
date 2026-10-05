@@ -17,6 +17,13 @@ you. keep it that way — the split is the whole ergonomic argument, and it mean
 
 ## ground rules
 
+0. **no AI, ever.** no model inference, no generated suggestions, no API keys, no
+   "ask an assistant" anything. every feature here is arithmetic over data already
+   on this machine: frecency is a half-life, `suggest` counts `cd` targets in your
+   history, typo suggestions are substring and edit distance. v8's "adaptive" is
+   statistics plus an explicit accept or reject, not a guess from a model. if a
+   feature can't be built without intelligence, it doesn't get built. this is the
+   reason the tool has two dependencies and works on a plane.
 1. **one source file on purpose.** `sd.cpp` is the entire program. resist
    splitting it, adding a build system beyond the one line in the Makefile, or
    pulling in a JSON or CLI library. libstdc++ and curl are the whole dependency
@@ -69,7 +76,14 @@ you. keep it that way — the split is the whole ergonomic argument, and it mean
     `[ "${1:0:1}" = "/" ]` instead of a `case` glob, and puts its comments
     *after* the last function. `make install` wires the rc **after** installing
     the binary, since `sdcfg init` is what generates the block.
-15. **history files are logs, not a data format.** `sd suggest` reads three
+15. **the prompt segment is state, and the state lives in the shell.**
+    `install_release` isn't the only thing that needs a `cd`: `SD_ALIAS` and
+    `SD_JUMPED_TO` are exported by the wrapper, because a subprocess cannot set
+    them either. the prompt checks `$PWD` against `SD_JUMPED_TO` rather than
+    hooking `cd`, so a plain `cd` clears the marker for free. never wrap `cd`.
+    `sdcfg prompt bash` rebuilds PS1 from a saved base every time — appending to
+    PS1 in a hook stacks a new copy on every prompt.
+16. **history files are logs, not a data format.** `sd suggest` reads three
     different formats from three different shells and every one of them will
     contain junk. parse defensively, never throw, and skip what isn't a directory
     that exists. `HOME` in a test must point somewhere empty or the developer's
@@ -78,10 +92,10 @@ you. keep it that way — the split is the whole ergonomic argument, and it mean
 ## before you touch anything
 
 ```bash
-make test     # 348 assertions, spawns real bash to verify the wrapper
+make test     # 372 assertions, spawns real bash to verify the wrapper
 ```
 
-it must be 348/348 (or more) before you commit. the suite drives the *compiled*
+it must be 372/372 (or more) before you commit. the suite drives the *compiled*
 binary through the same command-line surface a user does, and it covers the
 python-era behaviours too: the `cd` the wrapper actually performs, `install.sh`
 (platform refusal, asset download, compile fallback, install/uninstall round

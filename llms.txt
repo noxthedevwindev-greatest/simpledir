@@ -33,6 +33,14 @@ what it found and asks whether to repair, uninstall, or cancel.
 `bash install.sh --source` forces the compile path, `--uninstall` reverses it.
 `SIMPLEDIR_BIN_DIR`, `SIMPLEDIR_RC`, `SIMPLEDIR_PM`, `SIMPLEDIR_NO_RC=1`.
 
+## No AI
+
+There is none, and that is deliberate. Every feature is arithmetic over data
+already on this machine: frecency is a three-day half-life, `sd suggest` counts
+`cd` targets in your shell history, typo suggestions are substring and edit
+distance. No model inference, no generated suggestions, no API keys. The only
+network traffic is the update check. It has two dependencies and works offline.
+
 ## Commands
 
 `sd` — moves you, reads the config, records where you went:
@@ -199,6 +207,11 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ## Version history
 
+- 7.0.0 — `sdcfg prompt bash|zsh`: the shell wrapper records `SD_ALIAS` and
+  `SD_JUMPED_TO`, and the snippet draws the alias in the prompt while `$PWD` still
+  matches where the jump landed, so a plain `cd` clears it with no hook and no
+  overridden `cd`. Colour via `SD_PROMPT_COLOR`. bash verified for real, zsh
+  shape-tested only (no zsh on the build machine).
 - 6.5.0 — going back past v6.0.0 hands you `cp <target>.previous <target>` instead
   of a curl command: the binary it replaced is right there, and the message only
   mentions the installer when `.previous` genuinely isn't.
@@ -233,7 +246,7 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ```
 make        # one g++ invocation over one file
-make test   # 348 assertions against the compiled binary, no network
+make test   # 372 assertions against the compiled binary, no network
 make assets # dist/ (the binary, sd.cpp, install.sh, mode 755)
 make release
 ```

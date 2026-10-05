@@ -46,7 +46,7 @@
 namespace fs = std::filesystem;
 
 #ifndef VERSION
-#define VERSION "6.5.0"
+#define VERSION "7.0.0"
 #endif
 #define CONFIG_VERSION 2
 
@@ -2231,15 +2231,27 @@ int cmd_init() {
   // "/bin /boot /dev /etc ..." and the shell die with a syntax error.
   std::cout << "if ! command -v " << MOVE << " >/dev/null 2>&1; then export PATH=\"" << bindir
             << ":$PATH\"; fi;\n"
+            // How you arrived, for `sdcfg prompt` to render. The shell owns these
+            // because a subprocess cannot set them, same reason it owns the cd.
+            // SD_JUMPED_TO is what makes a plain `cd` clear the marker on its own:
+            // the prompt only shows the segment while $PWD still matches, so
+            // nothing has to hook or override cd.
+            << "export SD_ALIAS=;\n"
+            << "export SD_JUMPED_TO=;\n"
             << "_sd_jump() {\n"
-            << "  if [ -z \"${1-}\" ]; then builtin cd -- \"$HOME\" && return $?; fi;\n"
-            << "  if [ \"${1-}\" = \"-\" ]; then builtin cd -- \"$OLDPWD\" && return $?; fi;\n"
-            << "  if [ \"${1:0:1}\" = \"/\" ]; then builtin cd -- \"$1\" && return $?; fi;\n"
-            << "  if [ \"${1:0:1}\" = \"~\" ]; then builtin cd -- \"${1/#\\~/$HOME}\" && return $?;"
-               " fi;\n"
+            << "  if [ -z \"${1-}\" ]; then SD_ALIAS=; SD_JUMPED_TO=; export SD_ALIAS SD_JUMPED_TO;"
+               " builtin cd -- \"$HOME\" && return $?; fi;\n"
+            << "  if [ \"${1-}\" = \"-\" ]; then SD_ALIAS=; SD_JUMPED_TO=; export SD_ALIAS"
+               " SD_JUMPED_TO; builtin cd -- \"$OLDPWD\" && return $?; fi;\n"
+            << "  if [ \"${1:0:1}\" = \"/\" ]; then SD_ALIAS=; SD_JUMPED_TO=; export SD_ALIAS"
+               " SD_JUMPED_TO; builtin cd -- \"$1\" && return $?; fi;\n"
+            << "  if [ \"${1:0:1}\" = \"~\" ]; then SD_ALIAS=; SD_JUMPED_TO=; export SD_ALIAS"
+               " SD_JUMPED_TO; builtin cd -- \"${1/#\\~/$HOME}\" && return $?; fi;\n"
             << "  local _sd_dir;\n"
             << "  _sd_dir=$(command " << MOVE << " print \"$@\") || return $?;\n"
-            << "  builtin cd -- \"$_sd_dir\";\n"
+            << "  builtin cd -- \"$_sd_dir\" || return $?;\n"
+            << "  SD_ALIAS=$1; SD_JUMPED_TO=$_sd_dir; export SD_ALIAS SD_JUMPED_TO;\n"
+            << "  return 0;\n"
             << "};\n"
             << MOVE << "() {\n"
             << "  if [ \"${1-}\" = \"ls\" ] || [ \"${1-}\" = \"i\" ] || [ \"${1-}\" = \"print\" ]"
@@ -2255,6 +2267,60 @@ int cmd_init() {
             << "# resolves the name. `" << CONFIG << "` needs no wrapper: it changes things and\n"
             << "# never moves you. installed by `bash install.sh`, or by hand with\n"
             << "# eval \"$(" << CONFIG << " init)\".\n";
+  return 0;
+}
+
+// The prompt segment. `sd` records how you arrived (SD_ALIAS, SD_JUMPED_TO) and
+// this renders it, but only while you are still in the directory it took you to.
+// Comparing $PWD against SD_JUMPED_TO is what lets a plain `cd` clear the marker
+// with no hook and no overridden cd: move elsewhere and the segment stops
+// matching on its own.
+int cmd_prompt(const std::string& shell) {
+  std::string colour = env_or("SD_PROMPT_COLOR", "38;5;110");
+  if (colour.find(';') == std::string::npos && colour.find("38;5;") != 0)
+    throw UsageError("SD_PROMPT_COLOR wants an SGR sequence like 38;5;110");
+
+  if (shell == "bash") {
+    std::cout << "# simpledir prompt segment for bash. add it to ~/.bashrc:\n"
+              << "#   eval \"$(" << CONFIG << " prompt bash)\"\n"
+              << "# shows the alias you jumped by, in " << colour
+              << ", while you're still in the directory it took you to.\n"
+              << "# change that colour with SD_PROMPT_COLOR, e.g. 38;5;213\n"
+              << "_SD_BASE_PS1=\"\";\n"
+              << "_SD_ESC=$'\\033';\n"
+              << "_sd_prompt() {\n"
+              << "  if [ -z \"$_SD_BASE_PS1\" ]; then _SD_BASE_PS1=\"$PS1\"; fi;\n"
+              << "  SD_SEG=\"\";\n"
+              << "  if [ -n \"${SD_ALIAS-}\" ] && [ \"${SD_JUMPED_TO-}\" = \"$PWD\" ]; then\n"
+              << "    SD_SEG=\"$_SD_ESC[" << colour << "m$SD_ALIAS$_SD_ESC[0m \";\n"
+              << "  fi;\n"
+              << "  PS1=\"$SD_SEG$_SD_BASE_PS1\";\n"
+              << "};\n"
+              << "if [ -z \"${_SD_PROMPT_ON-}\" ]; then\n"
+              << "  _SD_PROMPT_ON=1;\n"
+              << "  PROMPT_COMMAND=\"_sd_prompt${PROMPT_COMMAND:+; $PROMPT_COMMAND}\";\n"
+              << "fi;\n";
+  } else if (shell == "zsh") {
+    std::cout << "# simpledir prompt segment for zsh. add it to ~/.zshrc:\n"
+              << "#   eval \"$(" << CONFIG << " prompt zsh)\"\n"
+              << "# shows the alias you jumped by, in " << colour
+              << ", while you're still in the directory it took you to.\n"
+              << "# change that colour with SD_PROMPT_COLOR, e.g. 38;5;213\n"
+              << "typeset -g _SD_ESC=$'\\033';\n"
+              << "_sd_prompt() {\n"
+              << "  local seg=\"\";\n"
+              << "  if [[ -n \"${SD_ALIAS-}\" && \"${SD_JUMPED_TO-}\" == \"$PWD\" ]]; then\n"
+              << "    seg=\"$_SD_ESC[" << colour << "m${SD_ALIAS}$_SD_ESC[0m \";\n"
+              << "  fi;\n"
+              << "  PS1=\"${seg}${PS1}\";\n"
+              << "};\n"
+              << "typeset -gaU precmd_functions;\n"
+              << "if (( ! ${precmd_functions[(I)_sd_prompt]} )); then\n"
+              << "  precmd_functions+=(sd_prompt);\n"
+              << "fi;\n";
+  } else {
+    throw UsageError("prompt takes bash or zsh");
+  }
   return 0;
 }
 
@@ -2276,7 +2342,7 @@ int cmd_completions(const std::string& shell) {
               << "complete -o filenames -F _" << MOVE << "_complete " << MOVE << "\n"
               << "\n"
               << "_" << CONFIG << "_complete() {\n"
-              << "  local cur verbs=\"add rm rename import bind forget migrate zoxide edit init "
+              << "  local cur verbs=\"add rm rename import bind forget migrate zoxide prompt edit init "
                  "completions update revert releases uninstall doctor\"\n"
               << "  cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
               << "  COMPREPLY=( $(compgen -W \"$verbs\" -- \"$cur\") )\n"
@@ -2294,7 +2360,7 @@ int cmd_completions(const std::string& shell) {
               << "fi\n"
               << "\n"
               << "_" << CONFIG << "() {\n"
-              << "  local -a verbs=(add rm rename import bind forget migrate zoxide edit init "
+              << "  local -a verbs=(add rm rename import bind forget migrate zoxide prompt edit init "
                  "completions update revert releases uninstall doctor)\n"
               << "  _describe -t commands 'sdcfg command' verbs\n"
               << "}\n"
@@ -2512,6 +2578,7 @@ const char* CONFIG_HELP =
     "  sdcfg zoxide                 import the directories zoxide knows about\n"
     "  sdcfg edit [<editor>]        open the config in $EDITOR\n"
     "  sdcfg init                   print the shell wrapper\n"
+    "  sdcfg prompt bash|zsh        print the prompt segment\n"
     "  sdcfg completions bash|zsh   print a completion script\n"
     "  sdcfg update                 check for a newer release and install it\n"
     "  sdcfg revert                 go back to the previously installed version\n"
@@ -2580,7 +2647,7 @@ int run_move(const std::vector<std::string>& argv) {
     return 0;
   }
   static const std::set<std::string> config_verbs = {
-      "add", "rm", "rename", "import", "bind", "forget", "migrate", "zoxide",
+      "add", "rm", "rename", "import", "bind", "forget", "migrate", "zoxide", "prompt",
       "edit", "init", "completions", "update", "revert", "releases", "uninstall", "doctor"};
   if (config_verbs.count(verb)) {
     throw UsageError("'" + verb + "' is not an " + MOVE + " command.\n  did you mean `" + CONFIG +
@@ -2599,7 +2666,7 @@ int run_config(const std::vector<std::string>& argv) {
   Args args = parse_args(rest);
 
   static const std::set<std::string> known = {
-      "add", "rm", "rename", "import", "bind", "forget", "migrate", "zoxide",
+      "add", "rm", "rename", "import", "bind", "forget", "migrate", "zoxide", "prompt",
       "edit", "init", "completions", "update", "revert", "releases", "uninstall", "doctor"};
 
   if (verb == "--version") {
@@ -2634,6 +2701,7 @@ int run_config(const std::vector<std::string>& argv) {
   if (verb == "uninstall") return cmd_uninstall(args);
   if (verb == "doctor") return cmd_doctor();
   if (verb == "init") return cmd_init();
+  if (verb == "prompt") return cmd_prompt(args.word(0));
   if (verb == "edit") {
     if (!path_exists(g_config_file)) {
       Config empty;

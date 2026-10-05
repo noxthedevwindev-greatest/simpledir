@@ -14,6 +14,13 @@ SD="$ROOT/sd"
 CFG="$ROOT/sdcfg"
 ln -sf sd "$CFG"
 
+# Belt and braces for rule 10. Most update/revert tests scope SIMPLEDIR_BIN
+# themselves, but `install_target()` falls back to ~/.local/bin/sd whenever that
+# variable is unset, so one forgotten test would write over the developer's real
+# install. Setting it once here means a forgotten scope writes to the temp dir
+# instead. Individual tests still override it where they care.
+export SIMPLEDIR_BIN="$SIMPLEDIR_CONFIG_DIR/../never-install-here"
+
 pass=0 fail=0
 
 check() { # check <label> <expected-exit> <command...>
@@ -1017,6 +1024,79 @@ check "sd i does not cd"       0 bash --noprofile --norc -c "
   source '$wrapper'; cd /tmp; printf '1\n' | SIMPLEDIR_NO_FZF=1 sd i >/dev/null; [[ \$PWD == /tmp ]]"
 check "sd suggest does not cd" 0 bash --noprofile --norc -c "
   source '$wrapper'; cd /tmp; sd suggest >/dev/null 2>&1; [[ \$PWD == /tmp ]]"
+
+# --- the prompt segment, and the state the wrapper leaves for it ---------------
+# The segment is the OmaWin/Starship idea: a coloured name in the prompt. The
+# design problem is that a plain `cd` must clear it, and the answer is to compare
+# $PWD against the directory we jumped to rather than hooking or overriding cd.
+check "prompt rejects an unknown shell" 2 "$CFG" prompt fish
+contains "prompt bash mentions itself"    "prompt bash"     "$CFG" prompt bash
+contains "prompt bash defines the hook"   "PROMPT_COMMAND"  "$CFG" prompt bash
+contains "prompt bash hooks once"         "_SD_PROMPT_ON"   "$CFG" prompt bash
+contains "prompt zsh uses precmd"         "precmd_functions" "$CFG" prompt zsh
+contains "prompt mentions the colour var" "SD_PROMPT_COLOR" "$CFG" prompt bash
+contains "prompt honours SD_PROMPT_COLOR" "38;5;213" env SD_PROMPT_COLOR="38;5;213" "$CFG" prompt bash
+check "prompt rejects a colour with no sgr" 2 env SD_PROMPT_COLOR=nonsense "$CFG" prompt bash
+
+PT=$(mktemp -d)
+mkdir -p "$PT/cfg" "$PT/tree/hypr"
+pt() { env SIMPLEDIR_CONFIG_DIR="$PT/cfg" "$@"; }
+pt "$CFG" add dots "$PT/tree" >/dev/null
+
+# Rendered for real, in a real bash, with a real PS1. $1 is a shell snippet run
+# after the wrapper and the segment are installed.
+# PATH first, always: the wrapper calls `command sd`, so whatever sd is on PATH is
+# the one under test unless we put ours in front. A test that silently exercises
+# the developer's real install is worse than no test.
+pt_render() {
+  SIMPLEDIR_CONFIG_DIR="$PT/cfg" PATH="$ROOT:$PATH" bash --noprofile --norc -c "
+    eval \"\$($CFG init)\"
+    eval \"\$($CFG prompt bash)\"
+    PS1='> '
+    render() { PS1='> '; _sd_prompt; printf '%s' \"\$PS1\"; }
+    $1
+  "
+}
+out=$(pt_render "cd /tmp; render")
+lacks "no marker before any jump"        "dots" "$out"
+out=$(pt_render "cd /tmp; sd dots; render")
+has   "the alias shows after a jump"      "dots" "$out"
+has   "the marker is coloured"            $'\033[38;5;110m' "$out"
+out=$(pt_render "cd /tmp; sd dots; cd /; render")
+lacks "a plain cd clears the marker"      "dots" "$out"
+out=$(pt_render "cd /tmp; sd dots/hypr; render")
+has   "a suffix jump shows what you typed" "dots/hypr" "$out"
+out=$(pt_render "cd /tmp; sd dots; sd -; render")
+lacks "sd - clears the marker"            "dots" "$out"
+out=$(pt_render "cd /tmp; sd dots; sd /tmp; render")
+lacks "a raw path clears the marker"      "dots" "$out"
+out=$(pt_render "cd /tmp; sd nosuchthing 2>/dev/null; render")
+lacks "a failed jump leaves no marker"    "dots" "$out"
+# The snippet rebuilds PS1 from a saved base every time, so calling the hook twice
+# without resetting PS1 — which is what a real prompt does — must still show the
+# alias once, not stack a second copy on the first.
+out=$(pt_render "cd /tmp; sd dots; _sd_prompt; _sd_prompt; printf '%s' \"\$PS1\"")
+check "rendering twice does not double up" 0 bash -c \
+  "[[ \$(grep -o dots <<<\"$out\" | wc -l) -eq 1 ]]"
+out=$(pt_render "cd /tmp; sd dots; _sd_prompt; printf '%s' \"\$PS1\"")
+has "rendering once keeps the base prompt" ">" "$out"
+
+# The state itself, since `sdcfg prompt` is only half of it: a subprocess cannot
+# set these, so the wrapper has to, and something has to check that it does.
+state() {
+  SIMPLEDIR_CONFIG_DIR="$PT/cfg" PATH="$ROOT:$PATH" bash --noprofile --norc -c "
+    eval \"\$($CFG init)\"
+    $1
+    printf 'alias=[%s] to=[%s]' \"\${SD_ALIAS-}\" \"\${SD_JUMPED_TO-}\"
+  "
+}
+has "a jump records the alias"       "alias=[dots]"  "$(state "cd /tmp; sd dots >/dev/null")"
+has "a jump records where it landed" "to=[$PT/tree]" "$(state "cd /tmp; sd dots >/dev/null")"
+has "no jump records nothing"        "alias=[]"      "$(state "cd /tmp")"
+has "sd - records nothing"           "alias=[]"      "$(state "cd /tmp; sd dots >/dev/null; cd /; sd -")"
+has "a raw path records nothing"     "alias=[]"      "$(state "cd /tmp; sd dots >/dev/null; sd /tmp")"
+has "a failed jump records nothing"  "alias=[]"      "$(state "cd /tmp; sd nosuchthing 2>/dev/null || true")"
+rm -rf "$PT"
 
 # the other way people install this: `eval $(sdcfg init)`, pasted by hand. word
 # splitting folds the newlines into one line, so the wrapper must not depend on
