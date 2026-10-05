@@ -274,6 +274,22 @@ want there anyway.
 tested on bash 5.2. the wrapper only uses portable constructs, so zsh should be
 fine, but that's untested — tell me if it breaks.
 
+## what's new in 6.5
+
+going back past v6.0.0 now hands you a way back that needs **nothing**:
+
+```
+  heads up: v4.0.0 is the old python build. it has no `sdcfg revert` and no `update --to`,
+  so it cannot bring you back here. to undo this, in a new shell:
+
+    cp /home/you/.local/bin/sd.previous /home/you/.local/bin/sd
+```
+
+the binary it just replaced is sitting right there. telling someone to `curl | bash`
+a script off the internet to undo a local change is three steps and a network where
+zero would do — and the installer is only mentioned now for the case where
+`sd.previous` genuinely isn't there, which it checks rather than assumes.
+
 ## what's new in 6.4
 
 **`--to` works for every version ever published, including the two that have no
@@ -504,7 +520,7 @@ else with `SIMPLEDIR_BIN=/path/to/sd`.
 
 ```bash
 make                # build: one g++ invocation over one file
-make test           # 340 assertions, real bash subprocesses, no network
+make test           # 348 assertions, real bash subprocesses, no network
 make assets         # dist/ for a release: the binary, sd.cpp, install.sh
 make release        # tag, push, publish with assets attached
 vhs docs/demo.tape  # re-record the gif above (needs vhs + ttyd)

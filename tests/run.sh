@@ -600,6 +600,30 @@ contains "--to finds the v4 'simpledir' asset" "done" rel v4 update --to v4.0.0
 contains "--to accepts the legacy name"  "calls itself" rel v4b update --to v4.0.0
 contains "--to warns the legacy build can't return" "cannot bring you back" \
   rel v4c update --to v4.0.0
+# The one-way door hands you a way back that needs nothing: the binary it replaced,
+# sitting right there. `.previous` only exists when there *was* something to
+# replace, which is why the message must not promise it unconditionally.
+install -m 755 "$SD" "$REL/installed-back"
+out=$(env SIMPLEDIR_RELEASE_URL="file://$REL" SIMPLEDIR_BIN="$REL/installed-back" \
+  SIMPLEDIR_NO_UPDATE_CHECK=1 "$CFG" update --to v4.0.0 2>&1)
+has "the one-way door gives a local way back" "cp "        "$out"
+has "the way back names the file it uses"    ".previous"  "$out"
+lacks "the way back doesn't tell you to curl" "install.sh" "$out"
+# the state the message describes: the target is now the old build, .previous is
+# the good one, and the pasted command brings it back
+check "the downgrade did take effect"   0 bash -c \
+  "'$REL/installed-back' --version | grep -q '^simpledir '"
+check "the downgrade left the good copy behind" 0 bash -c \
+  "'$REL/installed-back.previous' --version | grep -q '^sd '"
+check "the promised cp really restores" 0 bash -c "
+  cp '$REL/installed-back.previous' '$REL/installed-back' &&
+  '$REL/installed-back' --version | grep -q '^sd '"
+
+# with no prior install there is nothing to go back to, so it must not promise a file
+out=$(env SIMPLEDIR_RELEASE_URL="file://$REL" SIMPLEDIR_BIN="$REL/installed-fresh" \
+  SIMPLEDIR_NO_UPDATE_CHECK=1 "$CFG" update --to v4.0.0 2>&1)
+has "a first install has no previous to offer" "re-run the installer" "$out"
+lacks "a first install promises no file"       "cp "                "$out"
 check "--to installed the legacy build" 0 bash -c \
   "'$REL/installed-v4' --version | grep -q 'simpledir 4.0.0'"
 rm -f "$REL/legacy.cpp"

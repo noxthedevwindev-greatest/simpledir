@@ -199,6 +199,9 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ## Version history
 
+- 6.5.0 — going back past v6.0.0 hands you `cp <target>.previous <target>` instead
+  of a curl command: the binary it replaced is right there, and the message only
+  mentions the installer when `.previous` genuinely isn't.
 - 6.4.0 — `update --to` reaches every published version: v1.0.0 and v2.0.0 have
   no release asset at all, so it falls back to the source file in the tag, and a
   tag whose program disagrees with its own version string is reported rather than
@@ -230,7 +233,7 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ```
 make        # one g++ invocation over one file
-make test   # 340 assertions against the compiled binary, no network
+make test   # 348 assertions against the compiled binary, no network
 make assets # dist/ (the binary, sd.cpp, install.sh, mode 755)
 make release
 ```

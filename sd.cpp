@@ -46,7 +46,7 @@
 namespace fs = std::filesystem;
 
 #ifndef VERSION
-#define VERSION "6.4.0"
+#define VERSION "6.5.0"
 #endif
 #define CONFIG_VERSION 2
 
@@ -1982,13 +1982,25 @@ int install_release(const std::string& tag, bool allow_older) {
               << "`. it predates the two-command split,\n"
               << "  so there is no `" << CONFIG << "` half in this version.\n";
   }
+  // Going back past v6.0.0 leaves a shell that cannot undo it. Lead with the one
+  // command that needs nothing: the binary we just replaced is sitting right
+  // there. Telling someone to curl a script off the internet to undo a local
+  // change is three steps and a network where zero would do.
   if (got < 6.0) {
-    std::cout << "  heads up: v" << got_version
-              << " is the old python build. it has no `" << CONFIG
-              << " revert` and no `update --to`,\n"
-              << "  so it cannot bring you back here. to return to v6 or later:\n"
-              << "    curl -fsSL https://raw.githubusercontent.com/" << g_repo
-              << "/main/install.sh | bash\n";
+    std::cout << "  heads up: v" << got_version << " is the old python build. it has no `"
+              << CONFIG << " revert` and no `update --to`,\n"
+              << "  so it cannot bring you back here.\n";
+    // Never promise a file that isn't there. install_release writes .previous on
+    // the way in, so it normally is — but "normally" isn't good enough for the
+    // one instruction someone is about to paste into a shell.
+    if (path_exists(target + ".previous")) {
+      std::cout << "  to undo this, in a new shell:\n\n"
+                << "    cp " << target << ".previous " << target << "\n";
+    } else {
+      std::cout << "  to undo this, re-run the installer:\n"
+                << "    curl -fsSL https://raw.githubusercontent.com/" << g_repo
+                << "/main/install.sh | bash\n";
+    }
   }
   return static_cast<int>(got * 1000);  // the new version, times 1000
 }
