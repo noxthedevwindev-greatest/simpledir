@@ -199,6 +199,10 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ## Version history
 
+- 6.1.0 — `update --to` and `revert` actually work: the
+  release URL is built from the architecture, the release list is no longer a
+  prerequisite, every historical asset name is tried, and a legacy build that
+  calls itself `simpledir` is accepted.
 - 6.0.0 — rewritten in C++ (one file, no interpreter; 73 ms → 0.8 ms per jump),
   frecency so it remembers directories you never named, `sd top`, `sdcfg forget`,
   config version 2 with `sdcfg migrate`, `sdcfg zoxide` to import from zoxide,
@@ -215,7 +219,7 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ```
 make        # one g++ invocation over one file
-make test   # 287 assertions against the compiled binary, no network
+make test   # 322 assertions against the compiled binary, no network
 make assets # dist/ (the binary, sd.cpp, install.sh, mode 755)
 make release
 ```

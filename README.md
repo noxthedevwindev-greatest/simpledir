@@ -274,6 +274,19 @@ want there anyway.
 tested on bash 5.2. the wrapper only uses portable constructs, so zsh should be
 fine, but that's untested — tell me if it breaks.
 
+## what's new in 6.1
+
+`update --to` and `revert` work now. in 6.0.0 they were wired to the wrong asset
+name — every release publishes `sd-linux-<arch>`, and the code asked for `sd` —
+so they 404'd against github 100% of the time. `--to` also no longer needs a
+round trip to GitHub's API first, which is what made it fail with "couldn't
+reach GitHub" while rate-limited, even though it already knew the version you
+asked for.
+
+`revert` now refuses to pretend: if `sd.previous` is the version you're already
+running, it says there's nothing to do instead of writing the same file over
+itself and reporting success.
+
 ## what's new in 6.0
 
 **rewritten in C++.** one source file, no interpreter, no dependencies beyond
@@ -395,6 +408,21 @@ won't overwrite a working install with a same-version or garbage download, and
 every install keeps what it replaced at `sd.previous`, which is what `revert`
 puts back — offline, instantly, no network.
 
+`--to` works for **every published version**, not just the newest. the asset
+name has changed twice (`sd-linux-x86_64`, then `sd`, then `simpledir`), so it
+tries each spelling, and it accepts a v3/v4 build that calls itself `simpledir`
+rather than `sd`. it also needs no network round trip to GitHub's API, so it
+works even when you're rate-limited or offline.
+
+going back that far is a **one-way door**: versions before 6.0.0 are the python
+build and have neither `revert` nor `update --to`, so they can't bring you
+forward. `update --to` says so before it does it, and the way back is the
+installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/main/install.sh | bash
+```
+
 it also checks on its own, at most **once a day**, and only when you're sitting
 at a terminal — never on the jump path, never in a script, never if stderr isn't
 a tty. all it does is print one line:
@@ -427,7 +455,7 @@ else with `SIMPLEDIR_BIN=/path/to/sd`.
 
 ```bash
 make                # build: one g++ invocation over one file
-make test           # 287 assertions, real bash subprocesses, no network
+make test           # 322 assertions, real bash subprocesses, no network
 make assets         # dist/ for a release: the binary, sd.cpp, install.sh
 make release        # tag, push, publish with assets attached
 vhs docs/demo.tape  # re-record the gif above (needs vhs + ttyd)

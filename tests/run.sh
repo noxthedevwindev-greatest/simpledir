@@ -504,6 +504,106 @@ check "same-version asset wrote nothing" 0 bash -c "! test -e '$STUBS/samever'"
 unset SIMPLEDIR_BIN SIMPLEDIR_UPDATE_ASSET_URL SIMPLEDIR_UPDATE_URL
 rm -rf "$STUBS"
 
+# --- the real release URL, built the way GitHub serves one --------------------
+# Everything above overrides the finished URL, which means none of it saw how
+# that URL is constructed — and it was constructed wrong: it asked for an asset
+# called `sd`, while every release publishes `sd-linux-x86_64`. So `update` had
+# never once succeeded against github. Lay the tree out the way github does and
+# point only the *base* at it, which is the same thing SIMPLEDIR_RELEASE_URL does
+# for install.sh.
+REL=$(mktemp -d)
+arch=$(uname -m)
+case "$arch" in x86_64|amd64) asset="sd-linux-x86_64" ;; aarch64|arm64) asset="sd-linux-arm64" ;;
+  *) asset="sd-linux-$arch" ;; esac
+mkdir -p "$REL/latest/download" "$REL/download/v99.0.0"
+if command -v g++ >/dev/null 2>&1; then
+  g++ -std=c++17 -O1 -o "$REL/latest/download/$asset" "$ROOT/sd.cpp" -DVERSION='"99.0.0"' 2>/dev/null
+  g++ -std=c++17 -O1 -o "$REL/download/v99.0.0/$asset" "$ROOT/sd.cpp" -DVERSION='"99.0.0"' 2>/dev/null
+fi
+contains "the stand-in release runs" "sd 99.0.0" "$REL/latest/download/$asset" --version
+printf '[{"tag_name":"v99.0.0","published_at":"2026-01-01T00:00:00Z","name":"stub"}]\n' > "$REL/api_new.json"
+
+rel() { # rel <target-name> <args...>
+  local name=$1; shift
+  env SIMPLEDIR_RELEASE_URL="file://$REL" SIMPLEDIR_UPDATE_URL="file://$REL/api_new.json" \
+      SIMPLEDIR_BIN="$REL/installed-$name" SIMPLEDIR_NO_UPDATE_CHECK=1 "$CFG" "$@"
+}
+
+contains "update to latest finds the arch asset" "updated to 99.0.0" rel latest update --yes
+contains "update --to finds the tag's asset"     "done"           rel tag update --to v99.0.0
+contains "--to accepts a version without the v"   "done"           rel tag2 update --to 99.0.0
+check   "--to installed the right version"        0 bash -c "'$REL/installed-tag' --version | grep -q 99.0.0"
+
+# a tag that isn't shaped like a release is a typo, and should say so rather than
+# 404: `4.0.04` and `latest-ish` both look plausible to a user
+check   "--to rejects a malformed version"  2 rel bad update --to 4.0.04
+contains "--to says what a version looks like" "v6.0.0" rel bad update --to nonsense
+contains "--to points at releases"             "releases"  rel bad update --to nonsense
+check   "a malformed --to wrote nothing"    0 bash -c "! test -e '$REL/installed-bad'"
+
+# a well-shaped tag with no asset for this architecture
+check   "--to on a missing tag fails"       1 rel gone update --to v1.2.3
+contains "a missing asset names the arch"   "$(basename "$asset")" rel gone update --to v1.2.3
+contains "a missing asset suggests releases" "releases"  rel gone update --to v1.2.3
+check   "a missing tag wrote nothing"       0 bash -c "! test -e '$REL/installed-gone'"
+check   "no staging files left behind"      0 bash -c "! compgen -G '$REL/installed-gone.*'"
+
+# reverting onto the identical version is a no-op and has to say so, rather than
+# claiming success while writing the same bytes back over the same file
+install -m 755 "$SD" "$REL/installed-same"
+cp "$REL/installed-same" "$REL/installed-same.previous"
+contains "revert onto the same version is a no-op" "nothing to do" env \
+  SIMPLEDIR_BIN="$REL/installed-same" SIMPLEDIR_NO_UPDATE_CHECK=1 "$CFG" revert
+contains "revert no-op points at --to" "--to" env \
+  SIMPLEDIR_BIN="$REL/installed-same" SIMPLEDIR_NO_UPDATE_CHECK=1 "$CFG" revert
+check   "revert no-op left a working binary" 0 "$REL/installed-same" --version
+
+# The asset name has changed twice across releases: sd-linux-<arch> (v6+), sd
+# (v5.0.0), simpledir (v3-v4). `--to` has to try all of them, and has to accept a
+# legacy build that calls itself `simpledir` rather than `sd` -- it is still
+# simpledir, and refusing it looked like a corrupt download.
+if command -v g++ >/dev/null 2>&1; then
+  mkdir -p "$REL/download/v5.0.0" "$REL/download/v4.0.0"
+  cp "$REL/latest/download/$asset" "$REL/download/v5.0.0/sd"
+  # a v4-shaped asset: same program, older name, older version
+  cat > "$REL/legacy.cpp" <<'LEOF'
+// a stand-in for a pre-v5.0.0 asset: same idea, older command name
+#include <cstdio>
+#include <cstring>
+int main(int argc, char** argv) {
+  for (int i = 1; i < argc; i++)
+    if (strcmp(argv[i], "--version") == 0) { printf("simpledir 4.0.0 - the next zoxide\n"); return 0; }
+  return 0;
+}
+LEOF
+  g++ -std=c++17 -O1 -o "$REL/download/v4.0.0/simpledir" "$REL/legacy.cpp" 2>/dev/null
+fi
+contains "--to finds the v5 'sd' asset"   "done" rel v5 update --to v5.0.0
+contains "--to finds the v4 'simpledir' asset" "done" rel v4 update --to v4.0.0
+contains "--to accepts the legacy name"  "calls itself" rel v4b update --to v4.0.0
+contains "--to warns the legacy build can't return" "cannot bring you back" \
+  rel v4c update --to v4.0.0
+check "--to installed the legacy build" 0 bash -c \
+  "'$REL/installed-v4' --version | grep -q 'simpledir 4.0.0'"
+rm -f "$REL/legacy.cpp"
+
+# --to must not need the release list, so an unreachable api can't block it
+printf '[]\n' > "$REL/api.json"
+contains "--to works with no api reachable" "done" env \
+  SIMPLEDIR_RELEASE_URL="file://$REL" SIMPLEDIR_UPDATE_URL="file://$REL/api.json" \
+  SIMPLEDIR_BIN="$REL/installed-noapi" SIMPLEDIR_NO_UPDATE_CHECK=1 \
+  "$CFG" update --to v99.0.0
+check   "the api being empty is still an error for a plain update" 1 env \
+  SIMPLEDIR_UPDATE_URL="file://$REL/api.json" SIMPLEDIR_BIN="$REL/installed-x" \
+  SIMPLEDIR_NO_UPDATE_CHECK=1 "$CFG" update
+contains "an unreachable api suggests --to" "--to" env \
+  SIMPLEDIR_UPDATE_URL="file:///nonexistent/api.json" SIMPLEDIR_BIN="$REL/installed-x" \
+  SIMPLEDIR_NO_UPDATE_CHECK=1 "$CFG" update 2>&1
+contains "an unreachable api explains the limit" "60 requests" env \
+  SIMPLEDIR_UPDATE_URL="file:///nonexistent/api.json" SIMPLEDIR_BIN="$REL/installed-x" \
+  SIMPLEDIR_NO_UPDATE_CHECK=1 "$CFG" update 2>&1
+rm -rf "$REL"
+
 # the nudge: silent off-terminal, silent on the jump path, one line on a tty
 rm -rf "$SIMPLEDIR_CONFIG_DIR"
 "$CFG" add home "$HOME" >/dev/null
@@ -579,6 +679,32 @@ contains "uninstall flags a different target" "not the copy you're running" env 
   SIMPLEDIR_BIN="$UNROOT/elsewhere/sd" SIMPLEDIR_NO_UPDATE_CHECK=1 \
   "$CFG" uninstall --yes
 check "the running copy was left alone" 0 bash -c "test -x '$SD'"
+
+# SIMPLEDIR_BIN is exclusive too: a scoped uninstall must not reach for
+# $HOME/.local/bin/sdcfg. it used to, because that path was hardcoded instead of
+# derived from the target being removed, and a test run quietly deleted the
+# developer's real symlink — twice, before anyone worked out why it kept
+# disappearing between runs.
+#
+# HOME is faked rather than using the real ~/.local/bin: the bug is a hardcoded
+# $HOME path, so pointing HOME at a throwaway home reproduces it exactly without
+# putting the developer's own install at risk. An earlier version of this check
+# used the real directory behind an `if [ -e ]` guard, and the guard meant the
+# assertion never ran — the first uninstall had already deleted the file it was
+# supposed to be protecting.
+CANARY=$(mktemp -d)
+mkdir -p "$CANARY/.local/bin" "$CANARY/cfg" "$CANARY/target"
+printf 'not yours\n' > "$CANARY/.local/bin/sdcfg"
+printf '# rc\n\n# >>> simpledir >>>\nx\n# <<< simpledir <<<\n' > "$CANARY/rc"
+install -m 755 "$SD" "$CANARY/target/sd"
+ln -sf sd "$CANARY/target/sdcfg"
+check "the canary exists to begin with"   0 test -f "$CANARY/.local/bin/sdcfg"
+env HOME="$CANARY" SIMPLEDIR_RC="$CANARY/rc" SIMPLEDIR_CONFIG_DIR="$CANARY/cfg" \
+  SIMPLEDIR_BIN="$CANARY/target/sd" SIMPLEDIR_NO_UPDATE_CHECK=1 \
+  "$CANARY/target/sdcfg" uninstall --yes >/dev/null 2>&1
+check "uninstall removed the named target" 0 bash -c "! test -e '$CANARY/target/sd'"
+check "uninstall left \$HOME/.local/bin/sdcfg alone" 0 test -f "$CANARY/.local/bin/sdcfg"
+rm -rf "$CANARY"
 
 # SIMPLEDIR_RC is exclusive: uninstalling against it must leave the real
 # ~/.bashrc byte for byte alone. a test run once removed the wrapper from a

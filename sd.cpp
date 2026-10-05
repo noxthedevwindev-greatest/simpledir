@@ -41,11 +41,12 @@
 #include <pwd.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <sys/utsname.h>
 
 namespace fs = std::filesystem;
 
 #ifndef VERSION
-#define VERSION "6.0.0"
+#define VERSION "6.1.0"
 #endif
 #define CONFIG_VERSION 2
 
@@ -64,14 +65,31 @@ constexpr double FLOOR = 0.02;
 constexpr size_t MAX_HISTORY = 500;
 
 const std::string MOVE = "sd";
+const std::string MOVE_ID = "sd";
+const std::string legacy_ID = "simpledir";
 const std::string CONFIG = "sdcfg";
 
 // which half this invocation is: decided by the name it was called as
 std::string g_prog = MOVE;
 std::string g_mode = MOVE;
-std::string g_repo = "noxthedevwindev-greatest/simpledir";
+std::string g_owner = "noxthedevwindev-greatest";
+std::string g_repo = g_owner + "/simpledir";
 std::string g_api = "https://api.github.com/repos/noxthedevwindev-greatest/simpledir";
-std::string g_asset = "https://github.com/noxthedevwindev-greatest/simpledir/releases/latest/download/sd";
+std::string g_releases = "https://github.com/noxthedevwindev-greatest/simpledir/releases";
+
+// the asset name carries the architecture, and it has to match what `make assets`
+// and install.sh publish: sd-linux-x86_64 / sd-linux-arm64. a plain `sd` 404s on
+// every release, which is why `update` never worked against the real thing.
+std::string arch_tag() {
+  struct utsname uts;
+  if (uname(&uts) != 0) return "x86_64";
+  std::string machine = uts.machine;
+  if (machine == "aarch64" || machine == "arm64") return "arm64";
+  if (machine == "x86_64" || machine == "amd64") return "x86_64";
+  return machine;
+}
+
+std::string asset_name() { return "sd-linux-" + arch_tag(); }
 std::string g_config_dir;
 std::string g_config_file;
 std::string g_history_file;
@@ -1777,76 +1795,184 @@ std::vector<Release> releases(int limit) {
 // Download a release, check it really is us and really is the version asked
 // for, then swap it in. The binary it replaces is kept as `sd.previous`, which
 // is what `revert` puts back.
-int install_release(const std::string& tag, bool allow_older) {
-  std::string url = tag == "latest"
-                        ? env_or("SIMPLEDIR_RELEASE_URL", g_asset)
-                        : env_or("SIMPLEDIR_RELEASE_URL", g_asset.substr(0, g_asset.find("/latest/"))) +
-                              "/download/" + tag + "/sd";
-  if (const char* override = std::getenv("SIMPLEDIR_UPDATE_ASSET_URL")) url = override;
-
-  std::string tmp = "/tmp/sd-download-" + std::to_string(static_cast<long>(getpid()));
-  if (!download(url, tmp)) {
-    std::error_code ec;
-    fs::remove(tmp, ec);
-    die("download failed: " + url);
+// a tag has to look like a tag. `4.0.04` is a typo and would 404 with a message
+// that doesn't say so, so say it here instead.
+std::string normalize_tag(const std::string& raw) {
+  std::string want = trim(raw);
+  if (want.empty()) throw UsageError("which version? try " + CONFIG + " update --to v6.0.0");
+  if (want[0] != 'v') want = "v" + want;
+  std::string rest = want.substr(1);
+  // vX.Y.Z, optionally with a -rc.N suffix. nothing else is a release we made.
+  bool shaped = rest.size() >= 5 && std::isdigit(static_cast<unsigned char>(rest[0]));
+  int dots = 0;
+  for (size_t i = 0; i < rest.size() && shaped; i++) {
+    char c = rest[i];
+    if (c == '.') dots++;
+    else if (!std::isdigit(static_cast<unsigned char>(c)) && c != '-' && c != 'a' && c != 'b' &&
+             c != 'c' && c != 'd' && c != 'e' && c != 'f' && c != 'g' && c != 'h' && c != 'i' &&
+             c != 'j' && c != 'k' && c != 'l' && c != 'm' && c != 'n' && c != 'o' && c != 'p' &&
+             c != 'q' && c != 'r' && c != 's' && c != 't' && c != 'u' && c != 'v' && c != 'w' &&
+             c != 'x' && c != 'y' && c != 'z')
+      shaped = false;
   }
+  if (shaped && dots == 2) {
+    // v4.0.04 is a typo, not a release. a leading zero in a component is never
+    // something we publish, so say so here instead of 404ing on it later.
+    size_t start = 0;
+    for (int part = 0; part < 3; part++) {
+      size_t stop = rest.find('.', start);
+      std::string piece =
+          rest.substr(start, stop == std::string::npos ? std::string::npos : stop - start);
+      size_t dash = piece.find('-');
+      if (dash != std::string::npos) piece = piece.substr(0, dash);
+      if (piece.size() > 1 && piece[0] == '0') shaped = false;
+      if (stop == std::string::npos) break;
+      start = stop + 1;
+    }
+  }
+  if (!shaped || dots != 2)
+    throw UsageError("'" + raw + "' isn't a version. releases look like v6.0.0 or v6.1.0-rc.1\n"
+                     "  see what exists: " + CONFIG + " releases");
+  return want;
+}
 
-  // verify before we replace a working install
-  fs::permissions(tmp, fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec |
-                           fs::perms::others_read | fs::perms::others_exec,
-                 fs::perm_options::replace);
-  int status = 0;
-  std::string reported = trim(run_capture(shell_quote(tmp) + " --version 2>/dev/null", &status));
-  std::error_code ec;
-  fs::remove(tmp, ec);
-  if (status != 0) die("the downloaded file isn't runnable");
-  if (!starts_with(reported, MOVE + " ")) die("the downloaded file isn't " + MOVE + ": " + reported);
-  double got = std::atof(reported.substr(MOVE.size() + 1).c_str());
-  if (!allow_older && got <= std::atof(VERSION)) {
-    std::cout << "  asset is v" << reported.substr(MOVE.size() + 1) << ", same as what you have. not "
-              << "changing anything\n";
-    return 0;
+// Download a release, check it really is us and really is the version asked for,
+// then swap it in. The binary it replaces is kept as `sd.previous`, which is what
+// `revert` puts back.
+//
+// One download, straight to a staging file beside the target: the old version
+// fetched to /tmp to test it and then fetched the same bytes again, which is two
+// chances to fail and twice the bandwidth for no reason.
+int install_release(const std::string& tag, bool allow_older) {
+  // SIMPLEDIR_RELEASE_URL is a *base*, exactly as install.sh treats it, so the
+  // path below is the real one and a test can exercise it against a file:// tree
+  // laid out like a release. overriding the finished URL instead meant no test
+  // ever saw how it was built, which is how it went on pointing at an asset
+  // name nobody publishes.
+  std::string base = env_or("SIMPLEDIR_RELEASE_URL", g_releases);
+  // The asset name has changed twice, so try every spelling we have ever used,
+  // newest first: sd-linux-<arch> from v6.0.0, sd from v5.0.0, and simpledir from
+  // v3.0.0. Without this `--to v5.0.0` 404s while the version sits right there.
+  std::vector<std::string> urls;
+  if (const char* override = std::getenv("SIMPLEDIR_UPDATE_ASSET_URL")) {
+    urls.push_back(override);
+  } else {
+    std::string stem = tag == "latest" ? base + "/latest/download/"
+                                       : base + "/download/" + tag + "/";
+    urls.push_back(stem + asset_name());
+    urls.push_back(stem + "sd");
+    urls.push_back(stem + "simpledir");
   }
 
   std::string target = install_target();
+  std::error_code ec;
   fs::create_directories(fs::path(target).parent_path(), ec);
+  std::string staged = target + ".new." + std::to_string(static_cast<long>(getpid()));
+
+  std::string url = urls.front();
+  bool fetched = false;
+  for (const std::string& candidate : urls) {
+    if (download(candidate, staged)) {
+      url = candidate;
+      fetched = true;
+      break;
+    }
+  }
+  if (!fetched) {
+    fs::remove(staged, ec);
+    die("download failed for " + tag + ":\n  tried " + join(urls, "\n         ") +
+        "\n  if that tag exists, it predates v3.0.0 and shipped no binary at all;\n"
+        "  otherwise " + CONFIG + " releases lists what does");
+  }
+
+  // verify before we replace a working install
+  fs::permissions(staged, fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec |
+                                fs::perms::others_read | fs::perms::others_exec,
+                 fs::perm_options::replace);
+  int status = 0;
+  std::string reported = trim(run_capture(shell_quote(staged) + " --version 2>/dev/null", &status));
+  if (status != 0) {
+    fs::remove(staged, ec);
+    die("the download isn't runnable: " + url + "\n"
+        "  if that 404s, the release has no asset for " + arch_tag() + " yet");
+  }
+  // It has to identify as us before it replaces a working install — that's what
+  // stops a 404 page or a stray file getting chmod +x'd into your PATH. Releases
+  // before v5.0.0 called the command `simpledir`, so that name counts too:
+  // rejecting it meant `--to v4.0.0` refused a download that was perfectly
+  // correct, with a message that looked like corruption.
+  const std::string legacy = "simpledir";
+  bool is_sd = starts_with(reported, MOVE + " ");
+  bool is_legacy = starts_with(reported, legacy + " ");
+  if (!is_sd && !is_legacy) {
+    fs::remove(staged, ec);
+    die("the download isn't " + MOVE + ": " + reported + "\n  nothing was changed");
+  }
+  const std::string& name = is_sd ? MOVE_ID : legacy_ID;
+  double got = std::atof(reported.c_str() + name.size() + 1);
+  std::string got_version = trim(reported.substr(name.size() + 1));
+  size_t sp = got_version.find(' ');
+  if (sp != std::string::npos) got_version = got_version.substr(0, sp);
+  if (!allow_older && got <= std::atof(VERSION)) {
+    fs::remove(staged, ec);
+    std::cout << "  that asset is v" << got_version << ", same as what you have."
+              << " not changing anything\n";
+    return 0;
+  }
+
   if (path_exists(target)) {
     std::error_code copy_ec;
     fs::copy_file(target, target + ".previous", fs::copy_options::overwrite_existing, copy_ec);
   }
-  std::string staged = target + ".new." + std::to_string(static_cast<long>(getpid()));
-  int status2 = 0;
-  run_capture("curl -fsSL --retry 2 --connect-timeout 15 " + shell_quote(url) + " -o " +
-                  shell_quote(staged) + " 2>/dev/null",
-              &status2);
-  if (status2 != 0) die("download failed the second time. nothing was changed");
-  fs::permissions(staged,
-                  fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec |
-                      fs::perms::others_read | fs::perms::others_exec,
-                  fs::perm_options::replace);
   fs::rename(staged, target, ec);
   if (ec) {
     fs::remove(staged);
-    die("couldn't replace " + target + ": " + ec.message());
+    die("couldn't replace " + target + ": " + ec.message() + "\n  nothing was changed");
+  }
+
+  // Going back past v6.0.0 is a one-way door: the older program is the python
+  // one, which has neither `revert` nor `update --to`, so it cannot undo this.
+  // Say so while the user still has this version's installer to hand.
+  if (is_legacy) {
+    std::cout << "  note: v" << got_version << " calls itself `simpledir`, not `" << MOVE
+              << "`. it predates the two-command split,\n"
+              << "  so there is no `" << CONFIG << "` half in this version.\n";
+  }
+  if (got < 6.0) {
+    std::cout << "  heads up: v" << got_version
+              << " is the old python build. it has no `" << CONFIG
+              << " revert` and no `update --to`,\n"
+              << "  so it cannot bring you back here. to return to v6 or later:\n"
+              << "    curl -fsSL https://raw.githubusercontent.com/" << g_repo
+              << "/main/install.sh | bash\n";
   }
   return static_cast<int>(got * 1000);  // the new version, times 1000
 }
 
 int cmd_update(const Args& args) {
-  auto found = releases(1);
-  if (found.empty()) die("couldn't reach GitHub to check for updates. try again, or see " + g_repo);
-  std::string latest = found.front().tag;
-  std::cout << CONFIG << " " << VERSION << " installed, newest release is " << latest << "\n";
-
+  // `--to` names the version, so it never needs the release list. asking for it
+  // first meant an explicit `update --to v5.0.0` failed with "couldn't reach
+  // GitHub" whenever the API was rate-limited or offline, even though it had
+  // everything it needed to act.
   if (args.saw("to")) {
-    std::string want = args.value("to");
-    if (want.empty()) throw UsageError("which version? usage: " + CONFIG + " update --to v6.0.0");
-    if (want.find('v') != 0) want = "v" + want;
-    std::cout << "  installing " << want << " over " << install_target() << "\n";
-    install_release(want, true);
-    std::cout << "done. new shell needed if " << MOVE << " gained subcommands\n";
+    std::string want = normalize_tag(args.value("to"));
+    std::cout << CONFIG << " " << VERSION << " installed, installing " << want << " over "
+              << install_target() << "\n";
+    int installed = install_release(want, true);
+    if (installed)
+      std::cout << "  done. the previous one is at " << install_target() << ".previous\n";
+    std::cout << "  new shell needed if " << MOVE << " gained subcommands\n";
     return 0;
   }
+
+  auto found = releases(1);
+  if (found.empty())
+    die("couldn't reach GitHub to check for updates.\n"
+        "  the unauthenticated api allows 60 requests an hour per address; wait, or\n"
+        "  install a version directly: " + CONFIG + " update --to v6.0.0\n"
+        "  releases are also listed at " + g_repo + "/releases");
+  std::string latest = found.front().tag;
+  std::cout << CONFIG << " " << VERSION << " installed, newest release is " << latest << "\n";
 
   double have = std::atof(VERSION);
   double newest = std::atof(latest.c_str() + latest.find_first_not_of("v"));
@@ -1888,9 +2014,7 @@ int cmd_revert(const Args& args) {
   std::string previous = target + ".previous";
 
   if (args.saw("to")) {
-    std::string want = args.value("to");
-    if (want.empty()) throw UsageError("which version? usage: " + CONFIG + " revert --to v5.0.0");
-    if (want.find('v') != 0) want = "v" + want;
+    std::string want = normalize_tag(args.value("to"));
     install_release(want, true);
     std::cout << "now running " << want << " at " << target << "\n";
     return 0;
@@ -1904,6 +2028,17 @@ int cmd_revert(const Args& args) {
   std::string reported = trim(run_capture(shell_quote(previous) + " --version 2>/dev/null", &status));
   if (status != 0 || !starts_with(reported, MOVE + " ")) {
     die(previous + " isn't runnable. delete it, or use " + CONFIG + " update --to <version>");
+  }
+
+  // An sd.previous holding the version already installed means a previous revert
+  // ran, or an install overwrote things. Saying "back to X" while replacing the
+  // binary with the identical file reads like it worked and did nothing.
+  std::string have = trim(run_capture(shell_quote(target) + " --version 2>/dev/null", nullptr));
+  if (have == reported) {
+    std::cout << "nothing to do: " << previous << " is the same version you're already on ("
+              << reported << ")\n"
+              << "  install a specific one instead: " << CONFIG << " update --to v6.0.0\n";
+    return 0;
   }
 
   std::error_code ec;
@@ -2183,7 +2318,11 @@ int cmd_uninstall(const Args& args) {
   } else {
     std::cout << "nothing to remove at " << target << "\n";
   }
-  fs::remove(home_dir() + "/.local/bin/sdcfg", ec);
+  // sdcfg lives *next to* the sd we just removed, and nowhere else. a
+  // hardcoded ~/.local/bin/sdcfg here ignores SIMPLEDIR_BIN entirely, so a test
+  // run with a scoped SIMPLEDIR_BIN deleted the developer's real symlink — and
+  // did so quietly, twice, before anybody worked out why it kept vanishing.
+  fs::remove(fs::path(target).parent_path() / "sdcfg", ec);
 
   for (const std::string& rc : touched) std::cout << "cleaned the wrapper from " << rc << "\n";
 
