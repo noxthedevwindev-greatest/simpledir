@@ -83,6 +83,10 @@ you. keep it that way — the split is the whole ergonomic argument, and it mean
     hooking `cd`, so a plain `cd` clears the marker for free. never wrap `cd`.
     `sdcfg prompt bash` rebuilds PS1 from a saved base every time — appending to
     PS1 in a hook stacks a new copy on every prompt.
+    **test the path the pipe takes.** under `script`, stdin is a terminal, so a
+    test of install.sh reaches the `[ -t 0 ]` branch and never the `/dev/tty` one
+    that `curl | bash` uses. Run it with `</dev/null` inside the pty, and open
+    `/dev/tty` with `<>` — read-only means the prompt can't be printed to it.
 16. **history files are logs, not a data format.** `sd suggest` reads three
     different formats from three different shells and every one of them will
     contain junk. parse defensively, never throw, and skip what isn't a directory
@@ -92,10 +96,10 @@ you. keep it that way — the split is the whole ergonomic argument, and it mean
 ## before you touch anything
 
 ```bash
-make test     # 391 assertions, spawns real bash to verify the wrapper
+make test     # 392 assertions, spawns real bash to verify the wrapper
 ```
 
-it must be 391/391 (or more) before you commit. the suite drives the *compiled*
+it must be 392/392 (or more) before you commit. the suite drives the *compiled*
 binary through the same command-line surface a user does, and it covers the
 python-era behaviours too: the `cd` the wrapper actually performs, `install.sh`
 (platform refusal, asset download, compile fallback, install/uninstall round

@@ -95,11 +95,15 @@ ask() { # ask <default>
   if [ -t 0 ]; then
     printf '  what should i do? [r/u/c] ' >&2
     read -r REPLY || REPLY=""
-  elif exec 3</dev/tty 2>/dev/null; then
+  elif exec 3<>/dev/tty 2>/dev/null; then
     # Opening it is the only reliable test. `[ -r /dev/tty ]` is true whenever the
     # node exists and the mode allows it, even with no controlling terminal, and
     # the read then dies with ENXIO — which read as "asked, got nothing" and so
     # silently took the default.
+    #
+    # `<>` and not `<`: read-only, and the prompt written to fd 3 fails, so the
+    # installer asked a question it never displayed and only appeared to work
+    # because the default happened to be the right answer.
     printf '  what should i do? [r/u/c] ' >&3
     read -r REPLY <&3 || REPLY=""
     exec 3<&-

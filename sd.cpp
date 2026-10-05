@@ -46,7 +46,7 @@
 namespace fs = std::filesystem;
 
 #ifndef VERSION
-#define VERSION "7.0.1"
+#define VERSION "7.0.2"
 #endif
 #define CONFIG_VERSION 2
 

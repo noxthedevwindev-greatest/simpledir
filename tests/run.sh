@@ -930,7 +930,13 @@ cp install.sh "$ASK/i.sh"
 install -m 755 "$SD" "$ASK/pub/releases/latest/download/$asset"
 askcmd="env HOME=$ASK SHELL=/bin/bash PATH=/usr/bin:/bin SIMPLEDIR_BASE_URL=file://$ASK/pub SIMPLEDIR_SOURCE_URL=file://$ROOT bash $ASK/i.sh"
 bash -c "$askcmd" </dev/null >/dev/null 2>&1
-out=$(printf 'u\n' | script -qec "$askcmd" /dev/null 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
+
+# `</dev/null` on the inside is the whole point: stdin must NOT be a tty while
+# /dev/tty is, because that is what `curl … | bash` looks like from in there. A
+# test that lets stdin be the pty takes the `[ -t 0 ]` branch and never touches
+# the /dev/tty path at all — which is how a read-only `exec 3</dev/tty` shipped a
+# prompt that was written to a descriptor nobody could write to.
+out=$(printf 'u\n' | script -qec "$askcmd </dev/null" /dev/null 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
 has "the menu offers repair"     "repair"    "$out"
 has "the menu offers uninstall"  "uninstall"  "$out"
 has "the menu offers cancel"     "cancel"    "$out"
@@ -939,6 +945,9 @@ has "the answer uninstalls"      "removed"   "$out"
 check "uninstall over a pty removed the binary" 0 bash -c "! test -e '$ASK/.local/bin/sd'"
 check "the question appears once"  0 bash -c \
   "[[ \$(printf '%s' \"\$1\" | grep -c 'what should i do') -eq 1 ]]" _ "$out"
+# The prompt has to be *printed*, not merely implied by the answer working. It was
+# being written to a read-only fd 3, so the question was asked invisibly.
+has   "the question is shown"       "what should i do? [r/u/c]" "$out"
 rm -rf "$ASK"
 
 # cancel, in its own home: the run above uninstalled, so there is nothing left to
@@ -948,7 +957,7 @@ cp install.sh "$CANCEL/i.sh"
 install -m 755 "$SD" "$CANCEL/pub/releases/latest/download/$asset"
 cancelcmd="env HOME=$CANCEL SHELL=/bin/bash PATH=/usr/bin:/bin SIMPLEDIR_BASE_URL=file://$CANCEL/pub SIMPLEDIR_SOURCE_URL=file://$ROOT bash $CANCEL/i.sh"
 bash -c "$cancelcmd" </dev/null >/dev/null 2>&1
-out=$(printf 'c\n' | script -qec "$cancelcmd" /dev/null 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
+out=$(printf 'c\n' | script -qec "$cancelcmd </dev/null" /dev/null 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
 has "cancel says so"             "nothing was changed" "$out"
 check "cancel left the binary"    0 test -x "$CANCEL/.local/bin/sd"
 rm -rf "$CANCEL"

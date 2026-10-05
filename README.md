@@ -274,6 +274,26 @@ want there anyway.
 tested on bash 5.2. the wrapper only uses portable constructs, so zsh should be
 fine, but that's untested — tell me if it breaks.
 
+## what's new in 7.0.2
+
+the menu introduced in 7.0.1 asked its question **without printing it**. the
+prompt was written to a file descriptor opened read-only, so the write failed and
+the question was invisible — it only appeared to work because the default happened
+to be the answer:
+
+```
+  cancel    leave everything as it is and do nothing
+
+repair                              ← your typing, with no question above it
+==> repairing
+```
+
+the test missed it because under `script` stdin is a terminal, so it took the
+`[ -t 0 ]` branch and never touched the `/dev/tty` path that `curl | bash` actually
+uses. the test now runs the installer with stdin closed and the terminal still
+available, which is what the pipe looks like from in there, and asserts the prompt
+is *displayed* rather than inferring it from the answer working.
+
 ## what's new in 7.0.1
 
 the installer had two bugs that only `curl … | bash` could reach, which is to say
@@ -587,7 +607,7 @@ else with `SIMPLEDIR_BIN=/path/to/sd`.
 
 ```bash
 make                # build: one g++ invocation over one file
-make test           # 391 assertions, real bash subprocesses, no network
+make test           # 392 assertions, real bash subprocesses, no network
 make assets         # dist/ for a release: the binary, sd.cpp, install.sh
 make release        # tag, push, publish with assets attached
 vhs docs/demo.tape  # re-record the gif above (needs vhs + ttyd)
