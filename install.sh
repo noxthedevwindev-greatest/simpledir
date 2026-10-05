@@ -1,23 +1,32 @@
 #!/usr/bin/env bash
 #
-# simpledir installer. checks for python, installs it if needed (yay, pacman
-# or mise, in that order), then drops the tool in ~/.local/bin and wires your
-# shell rc.
+# simpledir installer. finds a prebuilt binary for this box, or compiles one,
+# then installs sd + sdcfg and wires your shell rc.
 #
 #   curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/main/install.sh | bash
 #
-# environment overrides:
-#   SIMPLEDIR_BIN_DIR   where to put the binaries          (default ~/.local/bin)
-#   SIMPLEDIR_RC        which rc file to patch              (default ~/.zshrc or ~/.bashrc)
+# options:
+#   --source        compile from source even if a binary exists
+#   --repair        refresh an existing install without asking
+#   --uninstall     remove the binaries and the rc block
+#   --help
+#
+# environment:
+#   SIMPLEDIR_BIN_DIR   where to install            (default ~/.local/bin)
+#   SIMPLEDIR_RC        which rc file to patch      (default ~/.zshrc or ~/.bashrc)
 #   SIMPLEDIR_PM        force a package manager: yay | pacman | mise
 #   SIMPLEDIR_NO_RC=1   install the binaries, don't touch the rc
-#   SIMPLEDIR_RELEASE_URL  where to fetch the tool from     (default: the latest release asset)
-#   SIMPLEDIR_RAW_URL      fallback source                 (default: the file on main)
+#   SIMPLEDIR_SOURCE_URL  base URL to fetch sd.cpp from when compiling
+#   SIMPLEDIR_BASE_URL    where release assets are fetched from
 #
 set -euo pipefail
 
 OWNER="noxthedevwindev-greatest"
 REPO="simpledir"
+BASE="${SIMPLEDIR_BASE_URL:-https://github.com/$OWNER/$REPO}"
+# a base directory for raw files, not a full path to one
+RAW="${SIMPLEDIR_SOURCE_URL:-https://raw.githubusercontent.com/$OWNER/$REPO/main}"
+case "$RAW" in */) ;; *) RAW="$RAW/" ;; esac
 BIN_DIR="${SIMPLEDIR_BIN_DIR:-$HOME/.local/bin}"
 SD="$BIN_DIR/sd"
 SDCFG="$BIN_DIR/sdcfg"
@@ -28,149 +37,155 @@ info() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
 
-usage() {
-  sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
+MODE="install"
+FORCE_SOURCE=0
+case "${1-}" in
+  -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  --source)   FORCE_SOURCE=1; shift ;;
+  --repair)   MODE=repair; shift ;;
+  -u|--uninstall) MODE=uninstall; shift ;;
+  "") ;;
+  *) die "unknown option '$1'. try --help" ;;
+esac
+
+# ------------------------------------------------------------------- platform
+
+uname_s=$(uname -s)
+uname_m=$(uname -m)
+
+# only linux, as advertised. say so plainly rather than installing something
+# that was never built or tested here.
+if [ "$uname_s" != "Linux" ]; then
+  die "this build of simpledir is for Linux only, and this is $uname_s.
+  building from source here would need a port; the source is one file:
+    git clone $BASE && cd simpledir && make"
+fi
+
+case "$uname_m" in
+  x86_64|amd64)      ARCH=x86_64 ;;
+  aarch64|arm64)     ARCH=arm64 ;;
+  *) die "no prebuilt binary for $uname_m. build from source: bash $0 --source" ;;
+esac
+
+ASSET="sd-linux-$ARCH"
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+compiler() { # prints the name of a C++ compiler, or nothing
+  if have g++; then echo g++
+  elif have clang++; then echo clang++
+  fi
 }
 
-validate_pm() {
-  # fail fast on a typo, even when python is already present
-  case "${SIMPLEDIR_PM:-}" in
-    ""|yay|pacman|mise) ;;
-    *) die "SIMPLEDIR_PM must be yay, pacman or mise (got '$SIMPLEDIR_PM')" ;;
-  esac
-}
+# --------------------------------------------------------------- the toolchain
 
-# ---------------------------------------------------------------- dependencies
-
-python_ok() {
-  command -v python3 >/dev/null 2>&1 || return 1
-  python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' 2>/dev/null
-}
-
-python_ver() {
-  python3 -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null || echo "?"
-}
-
-as_root() { # run a command as root, using sudo only if we aren't already
-  if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi
-}
-
-install_python() {
-  # yay first: on Arch it's the expected front end and it handles AUR too
+# only needed when there's no binary for this box
+install_toolchain() {
+  if compiler >/dev/null; then
+    return 0
+  fi
   local pm="${SIMPLEDIR_PM:-}"
   if [ -z "$pm" ]; then
     for candidate in yay pacman mise; do
-      if command -v "$candidate" >/dev/null 2>&1; then pm=$candidate; break; fi
+      if have "$candidate"; then pm=$candidate; break; fi
     done
   fi
-
-  case "$pm" in
-    yay)
-      info "installing python with yay"
-      yay -S --noconfirm --needed python
-      ;;
-    pacman)
-      info "installing python with pacman"
-      as_root pacman -S --noconfirm --needed python
-      ;;
-    mise)
-      info "installing python with mise"
-      mise use -g python@3.12 >/dev/null
-      ;;
-    "")
-      die "python 3.8+ not found, and none of yay, pacman or mise are installed. install python and re-run this script."
-      ;;
+  case "${SIMPLEDIR_PM:-}" in
+    yay|pacman|mise) ;;
+    "") warn "no C++ compiler found, and no yay, pacman or mise to install one with" ;;
+    *) die "SIMPLEDIR_PM must be yay, pacman or mise (got '$SIMPLEDIR_PM')" ;;
   esac
 
-  # a package manager can replace the python3 that bash had already hashed, and
-  # mise's shims only land on PATH in a fresh shell. drop the cache and retry.
-  hash -r 2>/dev/null || true
-
-  python_ok || die "python 3.8+ still isn't on PATH. open a new shell and re-run this script."
+  info "installing a C++ toolchain with $pm"
+  case "$pm" in
+    yay)    yay -S --noconfirm --needed base-devel ;;
+    pacman)
+      if [ "$(id -u)" -eq 0 ]; then pacman -S --noconfirm --needed base-devel
+      else sudo pacman -S --noconfirm --needed base-devel; fi ;;
+    mise)   mise use -g gcc@latest >/dev/null; mise use -g llvm@latest >/dev/null ;;
+    "")     die "install gcc (Arch: sudo pacman -S base-devel), then re-run with --source" ;;
+  esac
+  compiler >/dev/null || die "still no C++ compiler. install one and re-run with --source"
 }
 
-# ------------------------------------------------------------------- the tool
+# ----------------------------------------------------------------- fetching it
 
-fetch() { # fetch > path ; tries the latest release asset, falls back to main
-  local url out
-  for url in \
-    "${SIMPLEDIR_RELEASE_URL:-https://github.com/$OWNER/$REPO/releases/latest/download/sd}" \
-    "${SIMPLEDIR_RAW_URL:-https://raw.githubusercontent.com/$OWNER/$REPO/main/sd}"
-  do
-    out=$(mktemp)
-    chmod 755 "$out"
-    if curl -fsSL --retry 2 --connect-timeout 10 "$url" -o "$out" 2>/dev/null; then
-      # refuse anything that isn't our tool: a 404 page or an html error would
-      # otherwise get chmod +x'd into your PATH
-      if "$out" --version >/dev/null 2>&1 && "$out" --version 2>/dev/null | grep -q '^sd '; then
-        printf '%s' "$out"
-        return 0
+fetch() { # fetch <url> <dest>; returns non-zero if it isn't there
+  curl -fsSL --retry 2 --connect-timeout 15 "$1" -o "$2" 2>/dev/null
+}
+
+# Put a working `sd` at the path given. Tries the prebuilt binary for this
+# box first, and compiles from source if there isn't one. No traps: explicit
+# cleanup is easier to reason about than a RETURN trap that fires when some
+# nested function happens to return.
+obtain() {
+  local dest=$1
+  local work; work=$(mktemp -d)
+  local ok=0
+
+  if [ "$FORCE_SOURCE" = "0" ]; then
+    info "fetching the $ASSET binary"
+    if fetch "$BASE/releases/latest/download/$ASSET" "$work/sd"; then
+      chmod 755 "$work/sd"
+      # refuse anything that isn't our tool: a 404 page would otherwise get
+      # chmod +x'd into your PATH
+      if "$work/sd" --version 2>/dev/null | grep -q '^sd '; then
+        info "got $("$work/sd" --version)"
+        cp "$work/sd" "$dest"
+        ok=1
+      else
+        warn "that download isn't simpledir. building from source instead."
       fi
-      warn "downloaded something that isn't simpledir from $url, skipping"
+    else
+      warn "no prebuilt binary at $BASE/releases/latest/download/$ASSET"
     fi
-    rm -f "$out"
-  done
-  return 1
+  fi
+
+  if [ "$ok" = "0" ]; then
+    install_toolchain
+    info "compiling from source (one file, this takes a few seconds)"
+    fetch "$RAW/sd.cpp" "$work/sd.cpp" || { rm -rf "$work"; die "couldn't download sd.cpp from $RAW"; }
+    if ! "$(compiler)" -std=c++17 -O2 -static-libstdc++ -static-libgcc -o "$work/sd" "$work/sd.cpp"; then
+      rm -rf "$work"
+      die "compilation failed. sd.cpp is one file; the full error is above."
+    fi
+    "$work/sd" --version >/dev/null || { rm -rf "$work"; die "the build didn't produce a working binary"; }
+    info "built $("$work/sd" --version)"
+    cp "$work/sd" "$dest"
+  fi
+
+  chmod 755 "$dest"
+  rm -rf "$work"
 }
 
-install_tool() {
-  local fetched
-  info "downloading simpledir"
-  fetched=$(fetch) || die "could not download simpledir. check your network and try again."
-
-  mkdir -p "$BIN_DIR"
-  # write into the target directory, then rename: never a half-written binary
-  local staged
-  staged=$(mktemp "$BIN_DIR/.sd.XXXXXX")
-  cat "$fetched" > "$staged"
-  chmod 755 "$staged"
-  mv -f "$staged" "$SD"
-  rm -f "$fetched"
-
-  # one file, two names. the program decides what it is by argv[0], so a
-  # symlink is all the second name needs.
-  ln -sfn sd "$SDCFG"
-
-  info "installed $SD and $SDCFG ($("$SD" --version))"
-}
-
-# ----------------------------------------------------------------- the rc file
+# ------------------------------------------------------------------ the rc file
 
 pick_rc() {
-  if [ -n "${SIMPLEDIR_RC-}" ]; then
-    printf '%s' "$SIMPLEDIR_RC"
-    return
-  fi
+  if [ -n "${SIMPLEDIR_RC-}" ]; then printf '%s' "$SIMPLEDIR_RC"; return; fi
   case "${SHELL:-}" in
     */zsh) printf '%s' "${ZDOTDIR:-$HOME}/.zshrc" ;;
     *)     printf '%s' "$HOME/.bashrc" ;;
   esac
 }
 
-marker_pattern() { # escape the marker for use as a sed address
-  printf '%s' "$1" | sed 's/[][\.*^$/]/\\&/g'
-}
+marker_re() { printf '%s' "$1" | sed 's/[][\.*^$/]/\\&/g'; }
 
 wire_rc() {
   if [ -n "${SIMPLEDIR_NO_RC-}" ]; then
     info "skipping rc setup (SIMPLEDIR_NO_RC)"
     return
   fi
-
-  local rc
-  rc=$(pick_rc)
+  local rc; rc=$(pick_rc)
   touch "$rc"
 
   if grep -qF "$MARK_BEGIN" "$rc"; then
-    # already wired: refresh it so a new subcommand list reaches the wrapper
     local backup="$rc.bak.$(date +%Y%m%d%H%M%S)"
     cp -p "$rc" "$backup"
-    local kept
-    kept=$(mktemp)
-    sed "/$(marker_pattern "$MARK_BEGIN")/,/$(marker_pattern "$MARK_END")/d" "$rc" > "$kept"
+    local kept; kept=$(mktemp)
+    sed "/$(marker_re "$MARK_BEGIN")/,/$(marker_re "$MARK_END")/d" "$rc" > "$kept"
     { cat "$kept"; echo; echo "$MARK_BEGIN"; "$SDCFG" init; echo "$MARK_END"; } > "$rc"
     rm -f "$kept"
-    info "refreshed the wrapper block in $rc (old one in $backup)"
+    info "refreshed the wrapper block in $rc (the old one is in $backup)"
   else
     { echo; echo "$MARK_BEGIN"; "$SDCFG" init; echo "$MARK_END"; } >> "$rc"
     info "added the wrapper to $rc"
@@ -183,46 +198,96 @@ wire_rc() {
   esac
 }
 
-uninstall() {
-  # prefer the tool's own uninstaller: one implementation of "what to remove".
-  # SIMPLEDIR_RC keeps it to this installer's rc file and nothing else.
+remove_rc_block() {
   local rc; rc=$(pick_rc)
-  if [ -x "$SD" ]; then
-    if SIMPLEDIR_RC="$rc" "$SDCFG" uninstall --yes; then
-      return 0
-    fi
-    warn "simpledir uninstall exited non-zero, falling back to doing it by hand"
-  fi
-
-  # fall back to doing it by hand, for when the binary is already gone or broken
-  rm -f "$SD" "$SDCFG"
   if [ -f "$rc" ] && grep -qF "$MARK_BEGIN" "$rc"; then
     cp -p "$rc" "$rc.bak.$(date +%Y%m%d%H%M%S)"
-    sed "/$(marker_pattern "$MARK_BEGIN")/,/$(marker_pattern "$MARK_END")/d" "$rc" > "$rc.tmp"
+    sed "/$(marker_re "$MARK_BEGIN")/,/$(marker_re "$MARK_END")/d" "$rc" > "$rc.tmp"
     mv -f "$rc.tmp" "$rc"
     info "removed the wrapper block from $rc"
   fi
+}
+
+# --------------------------------------------------------------------- install
+
+install_tool() {
+  local work; work=$(mktemp -d)
+  obtain "$work/sd" || { rm -rf "$work"; die "could not obtain a working sd"; }
+
+  mkdir -p "$BIN_DIR"
+  # write beside the target, then rename: never a half-written binary in PATH
+  local staged; staged=$(mktemp "$BIN_DIR/.sd.XXXXXX")
+  cat "$work/sd" > "$staged"
+  chmod 755 "$staged"
+  mv -f "$staged" "$SD"
+  ln -sfn sd "$SDCFG"
+  rm -rf "$work"
+  info "installed $SD and $SDCFG"
+}
+
+# An existing install is a normal state, not an error. ask what to do with it
+# rather than silently overwriting or silently refusing.
+handle_existing() {
+  local rc; rc=$(pick_rc)
+  local have_binary=0 have_rc=0
+  [ -x "$SD" ] && have_binary=1
+  [ -f "$rc" ] && grep -qF "$MARK_BEGIN" "$rc" && have_rc=1
+  [ "$have_binary$have_rc" = "00" ] && return 0
+
+  info "found an existing simpledir install:"
+  [ "$have_binary" = "1" ] && info "  $SD ($("$SD" --version 2>/dev/null || echo 'unknown version'))"
+  [ "$have_rc" = "1" ] && info "  wrapper block in $rc"
+  info "  your aliases are in ~/.simpledir and are never touched by this script"
+
+  if [ "$MODE" = "repair" ]; then
+    info "repairing: replacing the binaries and refreshing the wrapper"
+    return 0
+  fi
+
+  if [ ! -t 0 ]; then
+    warn "not a terminal, so not asking. repairing the install (pass --uninstall to remove it)."
+    return 0
+  fi
+
+  printf '\n'
+  printf '  \033[1mr\033[0mepair   replace the binaries and refresh the wrapper (default)\n'
+  printf '  \033[1mu\033[0mninstall remove the binaries and the wrapper, keep your aliases\n'
+  printf '  \033[1mc\033[0mancel   leave everything as it is and do nothing\n\n'
+  printf '  what should i do? [r/u/c] '
+
+  local answer=""
+  read -r answer || answer=""
+  case "${answer:-r}" in
+    u|U) MODE=uninstall ;;
+    c|C) info "cancelled. nothing was changed."; exit 0 ;;
+    *)   info "repairing" ;;
+  esac
+}
+
+uninstall() {
+  if [ -x "$SDCFG" ]; then
+    SIMPLEDIR_RC="$(pick_rc)" "$SDCFG" uninstall --yes || warn "sdcfg uninstall reported a problem, finishing by hand"
+    return 0
+  fi
+  rm -f "$SD" "$SDCFG"
+  remove_rc_block
   info "done. your aliases are still in ~/.simpledir/config.json"
 }
 
 # ----------------------------------------------------------------------- main
 
-case "${1-}" in
-  -h|--help) usage; exit 0 ;;
-  -u|--uninstall) uninstall; exit $? ;;
-  "") ;;
-  *) die "unknown option '$1'. try --help" ;;
+# a typo in SIMPLEDIR_PM should be loud now, not 20 lines later when it matters
+case "${SIMPLEDIR_PM:-}" in
+  ""|yay|pacman|mise) ;;
+  *) die "SIMPLEDIR_PM must be yay, pacman or mise (got '$SIMPLEDIR_PM')" ;;
 esac
 
-info "simpledir installer"
-validate_pm
+info "simpledir installer ($uname_s/$ARCH)"
+handle_existing
 
-if python_ok; then
-  info "python $(python_ver) found"
-else
-  warn "python 3.8+ not found"
-  install_python
-  info "python $(python_ver) ready"
+if [ "$MODE" = "uninstall" ]; then
+  uninstall
+  exit 0
 fi
 
 install_tool
@@ -234,6 +299,7 @@ cat <<EOF
 
     sd <alias>           jump there
     sd ls                list what you can jump to
+    sd top               the frecency log
     sdcfg add <name>     bind the current directory
     sdcfg import ~/Projects
 
@@ -241,5 +307,5 @@ cat <<EOF
 
     cd ~ && sdcfg add home && sd ls
 
-  docs: https://github.com/$OWNER/$REPO
+  docs: $BASE
 EOF

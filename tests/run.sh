@@ -281,12 +281,43 @@ rm -rf "$SIMPLEDIR_CONFIG_DIR"
 "$CFG" add alpha "$HOME" >/dev/null
 "$CFG" add beta /tmp >/dev/null
 STUB=$(mktemp -d)
-printf '#!/usr/bin/env python3\nimport sys\nlines=sys.stdin.read().splitlines()\nprint(lines[0] if lines else "")\n' > "$STUB/fzf"
+# Real fzf takes its list on stdin and rejects positional arguments outright
+# (`fzf one two` -> "unknown option: one"), so the stub does the same. It also
+# records what it was handed, so a test can assert the shape of the list rather
+# than just that a name came back.
+cat > "$STUB/fzf" <<'STUBEOF'
+#!/usr/bin/env python3
+import os, sys
+items = sys.stdin.read().splitlines()
+log_path = os.environ.get("FZF_CALL_LOG")
+if log_path:
+    with open(log_path, "a") as log:
+        log.write("\n".join(items) + "\n--\n")
+if not items:
+    sys.exit(1)
+print(items[0])
+STUBEOF
 chmod +x "$STUB/fzf"
 
 # this machine has a real fzf, so force each branch explicitly
 contains "picker uses fzf when present"  "alpha" env PATH="$STUB:/usr/bin:/bin" SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" "$SD" i
 contains "picker filters"                "alpha" env PATH="$STUB:/usr/bin:/bin" SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" "$SD" i alp
+
+# the list must arrive on stdin as name<TAB>path, one per line
+FZF_CALL_LOG=$(mktemp)
+env PATH="$STUB:/usr/bin:/bin" FZF_CALL_LOG="$FZF_CALL_LOG" \
+  SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" "$SD" i >/dev/null
+has "fzf got the names"        "alpha" "$(cat "$FZF_CALL_LOG")"
+has "fzf got the paths too"    "/tmp"   "$(cat "$FZF_CALL_LOG")"
+check "fzf got a tab separator" 0 grep -qP '^alpha\t' "$FZF_CALL_LOG"
+check "fzf got one line each"   0 bash -c "[[ \$(grep -cP '\t' '$FZF_CALL_LOG') -eq 2 ]]"
+rm -f "$FZF_CALL_LOG"
+
+# a stub that picks something we never offered must not be believed
+printf '#!/usr/bin/env bash\necho notanalias\n' > "$STUB/fzf"
+check "picker rejects a bogus fzf answer"  1 env PATH="$STUB:/usr/bin:/bin" SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" "$SD" i
+contains "picker explains a bogus answer" "isn't one of your aliases" env PATH="$STUB:/usr/bin:/bin" SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" "$SD" i
+
 printf '#!/usr/bin/env bash\nexit 130\n' > "$STUB/fzf"
 check "escape from fzf exits 1"         1 env PATH="$STUB:/usr/bin:/bin" SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" "$SD" i
 
@@ -316,6 +347,113 @@ EDITOR=true check "edit with a no-op editor" 0 "$CFG" edit
 EDITOR=/nonexistent-binary-xyz check "edit reports bad editor" 1 "$CFG" edit
 contains "edit created a config" '"aliases"' cat "$SIMPLEDIR_CONFIG_DIR/config.json"
 
+# --- config v1 -> v2, `sdcfg migrate` ----------------------------------------
+# `migrate` moves the config file. `update` replaces the program. neither calls
+# the other, and the names are one character apart, so both get their own tests.
+V1=$(mktemp -d)
+printf '{"version": 1, "aliases": {"dots": "%s"}}' "$HOME" > "$V1/config.json"
+v1() { env SIMPLEDIR_CONFIG_DIR="$V1" "$CFG" "$@"; }
+
+out=$(v1 migrate --dry-run)
+has "migrate --dry-run says would"        "would migrate"     "$out"
+has "migrate --dry-run shows the version" "version 1 -> 2"    "$out"
+check "migrate --dry-run wrote nothing"   0 grep -q '"version": 1' "$V1/config.json"
+check "migrate --dry-run made no history" 0 bash -c "! test -e '$V1/history.json'"
+
+out=$(v1 migrate)
+has "migrate reports the versions"        "version 1 -> 2"    "$out"
+has "migrate says the aliases survived"   "aliases kept"      "$out"
+has "migrate names the backup"            "backup:"           "$out"
+check "migrate wrote version 2"           0 grep -q '"version": 2' "$V1/config.json"
+check "migrate created the history file"  0 test -f "$V1/history.json"
+check "migrate kept a backup"             0 bash -c "compgen -G '$V1/config.json.bak.*' >/dev/null"
+check "migrate kept every alias"          0 grep -q "\"dots\": \"$HOME\"" "$V1/config.json"
+check "the alias still jumps"             0 env SIMPLEDIR_CONFIG_DIR="$V1" "$SD" print dots
+contains "migrate says nothing to do next time" "already version 2" "$(v1 migrate)"
+check "migrate is idempotent"             0 v1 migrate
+check "a second migrate changes nothing"  0 grep -q '"version": 2' "$V1/config.json"
+
+V9=$(mktemp -d)
+printf '{"version": 9, "aliases": {}}' > "$V9/config.json"
+out=$(env SIMPLEDIR_CONFIG_DIR="$V9" "$CFG" migrate 2>&1)
+has "a newer config is refused"      "only knows version" "$out"
+has "a newer config names the fix"   "sdcfg update"      "$out"
+check "a newer config is not rewritten" 0 grep -q '"version": 9' "$V9/config.json"
+
+# --- frecency: directories you never named ------------------------------------
+# the whole point of v6. seed a visit log by jumping, then reach it by a word
+# that was never an alias.
+FR=$(mktemp -d)
+mkdir -p "$FR/wezterm-config" "$FR/dots"
+fr() { env SIMPLEDIR_CONFIG_DIR="$FR" "$@" ; }
+fr "$CFG" add wz "$FR/wezterm-config" >/dev/null
+fr "$SD" print wz >/dev/null            # the jump records it
+check "a jump writes the history file"  0 test -f "$FR/history.json"
+contains "history records the path" 'wezterm-config' cat "$FR/history.json"
+fr "$CFG" rm wz >/dev/null              # and the name goes away
+lacks   "the name is out of the listing" "wz" "$(fr "$SD" ls --names)"
+out=$(fr "$SD" print wez)
+has "frecency finds the unnamed dir"   "$FR/wezterm-config" "$out"
+check "the alias is not in the config"  1 grep -q '"wz"' "$FR/config.json"
+check "the path is still remembered"    0 grep -q 'wezterm-config' "$FR/history.json"
+
+# a named directory is reachable by name, so frecency needn't offer it
+fr "$CFG" add dots "$FR/dots" >/dev/null
+fr "$SD" print dots >/dev/null          # a named directory is recorded too
+contains "top lists what was visited"   "wezterm-config" "$(fr "$SD" top)"
+contains "top marks named paths"        "[named]"         "$(fr "$SD" top)"
+lacks   "top leaves unnamed paths bare" "$(printf '%s   [named]' "$FR/wezterm-config")" \
+  "$(fr "$SD" top)"
+contains "top --json is an array"       '"score"'         "$(fr "$SD" top --json)"
+lacks   "top --json is not an object"   '"aliases"'       "$(fr "$SD" top --json)"
+
+# recording can be turned off, two ways
+FR2=$(mktemp -d); mkdir -p "$FR2/quiet"
+fr2() { env SIMPLEDIR_CONFIG_DIR="$FR2" "$@"; }
+fr2 "$CFG" add q "$FR2/quiet" >/dev/null
+SIMPLEDIR_NO_HISTORY=1 fr2 "$SD" print q >/dev/null
+check "SIMPLEDIR_NO_HISTORY stops the log" 0 bash -c "! test -e '$FR2/history.json'"
+rm -f "$FR2/history.json"
+python3 - "$FR2/config.json" <<'EOF'
+import json, sys
+p = sys.argv[1]
+c = json.load(open(p))
+c["history"] = False
+json.dump(c, open(p, "w"))
+EOF
+fr2 "$SD" print q >/dev/null
+check '"history": false stops the log'   0 bash -c "! test -e '$FR2/history.json'"
+
+# --- sdcfg forget -------------------------------------------------------------
+contains "forget on an empty log is fine" "already empty" \
+  "$(env SIMPLEDIR_CONFIG_DIR=$(mktemp -d) "$CFG" forget)"
+contains "forget --all wipes it"          "forgot all"   "$(fr "$CFG" forget --all --yes)"
+check   "forget --all emptied the file"   0 bash -c "[[ \$(grep -c wezterm '$FR/history.json' 2>/dev/null || echo 0) -eq 0 ]]"
+
+# a directory that has been deleted is the one worth forgetting
+FR3=$(mktemp -d); mkdir -p "$FR3/gone"
+fr3() { env SIMPLEDIR_CONFIG_DIR="$FR3" "$@"; }
+fr3 "$CFG" add g "$FR3/gone" >/dev/null
+fr3 "$SD" print g >/dev/null
+rmdir "$FR3/gone"
+contains "top marks a deleted dir"  "gone"     "$(fr3 "$SD" top)"
+out=$(fr3 "$CFG" forget)
+has "forget says how many it dropped" "forgot 1"   "$out"
+has "forget names the dead path"      "$FR3/gone"  "$out"
+check   "forget dropped it"            1 grep -q "gone" "$FR3/history.json"
+# --path drops one entry and leaves the rest, so the log needs two in it
+mkdir -p "$FR3/live" "$FR3/other"
+fr3 "$CFG" add l "$FR3/live" >/dev/null
+fr3 "$SD" print l >/dev/null
+fr3 "$CFG" add o "$FR3/other" >/dev/null
+fr3 "$SD" print o >/dev/null
+contains "forget --path drops one"      "forgot $FR3/live" "$(fr3 "$CFG" forget --path "$FR3/live")"
+contains "forget --path keeps the rest" "$FR3/other"      "$(fr3 "$SD" top)"
+check   "forget --path kept the entry"  0 grep -q "other" "$FR3/history.json"
+contains "forget --path on a stranger is an error" "nothing remembered" \
+  "$(fr3 "$CFG" forget --path /nowhere/at/all 2>&1)"
+rm -rf "$V1" "$V9" "$FR" "$FR2" "$FR3"
+
 # --- sdcfg update (offline: file:// stubs) -----------------------------------
 STUBS=$(mktemp -d)
 me=$("$CFG" --version | awk '{print $2}')
@@ -338,13 +476,15 @@ export SIMPLEDIR_UPDATE_URL="file://$STUBS/missing.json"
 contains "unreachable api explains itself" "couldn't reach GitHub" "$CFG" update --check
 check "unreachable api exits 1" 1 "$CFG" update --check
 
-# self-install: stub asset is this script with a bumped VERSION
-sed 's/^VERSION = "[^"]*"/VERSION = "99.0.0"/' "$SD" > "$STUBS/candidate"
-chmod +x "$STUBS/candidate"
+# self-install: the stub asset is the same source compiled with a bumped
+# VERSION, since sd is a compiled binary now rather than a script to sed
+if command -v g++ >/dev/null 2>&1; then
+  g++ -std=c++17 -O1 -o "$STUBS/candidate" "$ROOT/sd.cpp" -DVERSION='"99.0.0"' 2>/dev/null
+fi
 export SIMPLEDIR_UPDATE_URL="file://$STUBS/api_new.json"
 export SIMPLEDIR_UPDATE_ASSET_URL="file://$STUBS/candidate"
 export SIMPLEDIR_BIN="$STUBS/installed"
-contains "update installs with --yes" "updated to v99.0.0" "$CFG" update --yes
+contains "update installs with --yes" "updated to 99.0.0" "$CFG" update --yes
 check "installed binary works" 0 "$STUBS/installed" --version
 contains "installed binary is the new version" "99.0.0" "$STUBS/installed" --version
 contains "installed binary still knows its name" "sd 99.0.0" "$STUBS/installed" --version
@@ -440,8 +580,16 @@ contains "uninstall flags a different target" "not the copy you're running" env 
   "$CFG" uninstall --yes
 check "the running copy was left alone" 0 bash -c "test -x '$SD'"
 
-# SIMPLEDIR_RC is exclusive: it must not reach for the real ~/.bashrc
-check "SIMPLEDIR_RC is exclusive"      0 bash -c "grep -q '>>> simpledir >>>' '$HOME/.bashrc'"
+# SIMPLEDIR_RC is exclusive: uninstalling against it must leave the real
+# ~/.bashrc byte for byte alone. a test run once removed the wrapper from a
+# developer's real rc because of exactly this.
+rc_before=$(md5sum "$HOME/.bashrc" 2>/dev/null || echo missing)
+d=$(fresh exclusiverc)
+env SIMPLEDIR_RC="$d/rc" SIMPLEDIR_CONFIG_DIR="$d/cfg" SIMPLEDIR_BIN="$d/bin/sd" \
+    SIMPLEDIR_NO_UPDATE_CHECK=1 "$d/bin/sdcfg" uninstall --yes >/dev/null 2>&1
+check "SIMPLEDIR_RC is exclusive"      0 bash -c \
+  "[[ \"\$(md5sum '$HOME/.bashrc' 2>/dev/null || echo missing)\" == '$rc_before' ]]"
+lacks   "the named rc did get cleaned" ">>> simpledir >>>" cat "$d/rc"
 rm -rf "$UNROOT"
 
 # --- sdcfg doctor ------------------------------------------------------------
@@ -467,7 +615,8 @@ check "completions reject junk" 2 "$CFG" completions fish
 check "generated bash comp is valid bash" 0 bash -n <("$CFG" completions bash)
 
 # --- install.sh --------------------------------------------------------------
-# offline: SIMPLEDIR_RELEASE_URL points at the repo copy through a file:// url
+# offline: the release fetcher is pointed at a local stand-in for a published
+# binary, and the source fetcher at the repo, so neither path touches the network
 check "install.sh parses"        0 bash -n "$ROOT/install.sh"
 contains "install.sh --help"     "curl -fsSL" bash "$ROOT/install.sh" --help
 check "install.sh rejects junk"  1 bash "$ROOT/install.sh" --nope
@@ -475,19 +624,37 @@ contains "install.sh validates pm" "must be yay" env SIMPLEDIR_PM=brew bash "$RO
 check "install.sh bad pm exits 1" 1 env SIMPLEDIR_PM=brew bash "$ROOT/install.sh"
 
 FAKEHOME=$(mktemp -d)
+
+# a stand-in for a published release, so the happy path (download a prebuilt
+# binary) is exercised without the network
+PUBLISH_DIR=$(mktemp -d)
+arch=$(uname -m)
+case "$arch" in x86_64|amd64) arch=x86_64 ;; aarch64|arm64) arch=arm64 ;; esac
+mkdir -p "$PUBLISH_DIR/releases/latest/download"
+install -m 755 "$SD" "$PUBLISH_DIR/releases/latest/download/sd-linux-$arch"
+contains "the stand-in release asset works" "sd " \
+  "$PUBLISH_DIR/releases/latest/download/sd-linux-$arch" --version
+
 helper="$FAKEHOME/install-here"
 cat > "$helper" <<EOF
 #!/usr/bin/env bash
-# install into a throwaway HOME, from the local file, no network.
+# install into a throwaway HOME, with the network stubbed out.
 # \$1 is the fake home, the rest are install.sh's own arguments.
 home=\$1; shift
 mkdir -p "\$home"
 env HOME="\$home" SHELL=/bin/bash PATH="/usr/bin:/bin" \\
-    SIMPLEDIR_RELEASE_URL="file://$ROOT/sd" \\
-    SIMPLEDIR_RAW_URL="file://$ROOT/sd" \\
+    SIMPLEDIR_BASE_URL="file://$PUBLISH_DIR" \\
+    SIMPLEDIR_SOURCE_URL="file://$ROOT" \\
     bash "$ROOT/install.sh" "\$@"
 EOF
 chmod +x "$helper"
+
+# the installer only claims Linux, and says so rather than pretending
+stub_uname="uname() { case \"\$1\" in -s) echo Darwin;; *) command uname \"\$1\";; esac; }; export -f uname;"
+check "install.sh refuses non-linux" 1 env SIMPLEDIR_NO_RC=1 bash -c \
+  "$stub_uname '$helper' '$FAKEHOME/mac'"
+contains "non-linux message names the os" "Darwin" env SIMPLEDIR_NO_RC=1 bash -c \
+  "$stub_uname '$helper' '$FAKEHOME/mac2'"
 
 check "install.sh installs sd"       0 env SIMPLEDIR_NO_RC=1 "$helper" "$FAKEHOME/plain"
 check "sd is executable"              0 "$FAKEHOME/plain/.local/bin/sd" --version
@@ -505,7 +672,7 @@ contains "rc has the begin marker" "# >>> simpledir >>>" cat "$FAKEHOME/withrc/.
 check "rc marker appears once" 0 bash -c \
   "[ \$(grep -c '>>> simpledir >>>' '$FAKEHOME/withrc/.bashrc') -eq 1 ]"
 check "rc block defines sd" 0 bash -c "grep -q '^sd()' '$FAKEHOME/withrc/.bashrc'"
-check "rc block mentions sdcfg" 0 bash -c "grep -q 'changes things and never moves you' '$FAKEHOME/withrc/.bashrc'"
+check "rc block mentions sdcfg" 0 bash -c "grep -q 'never moves you' '$FAKEHOME/withrc/.bashrc'"
 "$CFG" add home "$HOME" >/dev/null
 check "wired shell actually jumps" 0 env -i HOME="$FAKEHOME/withrc" \
   SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" PATH="/usr/bin:/bin" TERM=dumb \
@@ -539,15 +706,18 @@ check "uninstall removes the rc block" 0 "$helper" "$FAKEHOME/withrc" --uninstal
 check "rc block is gone" 0 bash -c "! grep -q '>>> simpledir >>>' '$FAKEHOME/withrc/.bashrc'"
 check "uninstall kept a backup" 0 bash -c "compgen -G '$FAKEHOME/withrc/.bashrc.bak.*' >/dev/null"
 
-# a bad download must not be chmod +x'd into place
-printf '<html>404</html>\n' > "$SIMPLEDIR_CONFIG_DIR/notatool"
+# a bad download must not be chmod +x'd into place, and when there is no usable
+# asset and no source either, it must say so rather than install nothing quietly
+JUNKY=$(mktemp -d)
+mkdir -p "$JUNKY/releases/latest/download"
+printf '<html>404</html>\n' > "$JUNKY/releases/latest/download/sd-linux-$arch"
 mkdir -p "$FAKEHOME/bad"
 check "installer refuses a bad download" 1 env HOME="$FAKEHOME/bad" SHELL=/bin/bash \
   PATH="/usr/bin:/bin" SIMPLEDIR_NO_RC=1 \
-  SIMPLEDIR_RELEASE_URL="file://$SIMPLEDIR_CONFIG_DIR/notatool" \
-  SIMPLEDIR_RAW_URL="file://$SIMPLEDIR_CONFIG_DIR/notatool" \
+  SIMPLEDIR_BASE_URL="file://$JUNKY" SIMPLEDIR_SOURCE_URL="file:///nonexistent" \
   bash "$ROOT/install.sh"
 check "nothing installed from a bad download" 0 bash -c "! test -e '$FAKEHOME/bad/.local/bin/sd'"
+rm -rf "$JUNKY"
 rm -rf "$FAKEHOME"
 
 # --- the shell wrapper -------------------------------------------------------
@@ -586,6 +756,24 @@ check "sd i does not cd"       0 bash --noprofile --norc -c "
   source '$wrapper'; cd /tmp; printf '1\n' | SIMPLEDIR_NO_FZF=1 sd i >/dev/null; [[ \$PWD == /tmp ]]"
 check "sd suggest does not cd" 0 bash --noprofile --norc -c "
   source '$wrapper'; cd /tmp; sd suggest >/dev/null 2>&1; [[ \$PWD == /tmp ]]"
+
+# the other way people install this: `eval $(sdcfg init)`, pasted by hand. word
+# splitting folds the newlines into one line, so the wrapper must not depend on
+# them: every statement ends in `;` and nothing before the last construct is a
+# comment. both it and the quoted form have to define a working `sd`.
+check "quoted eval of init defines sd" 0 bash --noprofile --norc -c "
+  eval \"\$($CFG init)\"; [[ \$(type -t sd) == function ]]"
+check "quoted eval of init jumps" 0 bash --noprofile --norc -c "
+  eval \"\$($CFG init)\"; cd /tmp; sd home; [[ \$PWD == '$HOME' ]]"
+check "unquoted eval of init defines sd" 0 bash --noprofile --norc -c "
+  eval \$($CFG init); [[ \$(type -t sd) == function ]]"
+check "unquoted eval of init jumps" 0 bash --noprofile --norc -c "
+  eval \$($CFG init); cd /tmp; sd home; [[ \$PWD == '$HOME' ]]"
+check "eval of init leaves sdcfg alone" 0 bash --noprofile --norc -c "
+  eval \"\$($CFG init)\"; [[ \$(type -t sdcfg) != function ]]"
+# a sourced-from-file install must still work too
+check "sourced init defines sd" 0 bash --noprofile --norc -c "
+  source '$wrapper'; [[ \$(type -t sd) == function ]]"
 
 # sdcfg needs no wrapper and must never move you
 check "sdcfg runs bare"        0 bash --noprofile --norc -c "

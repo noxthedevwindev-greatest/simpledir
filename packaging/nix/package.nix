@@ -1,54 +1,83 @@
 { lib
-, stdenvNoCC
+, stdenv
 , fetchFromGitHub
+, curl
 , makeWrapper
-, python3
 }:
 
-stdenvNoCC.mkDerivation rec {
+stdenv.mkDerivation (finalAttrs: {
   pname = "simpledir";
-  version = "4.0.0";
+  version = "6.0.0";
 
   src = fetchFromGitHub {
     owner = "noxthedevwindev-greatest";
     repo = "simpledir";
-    rev = "v${version}";
-    # nixpkgs-review fills this in for you, or:
+    rev = "v${finalAttrs.version}";
+    # fill this in from the nixpkgs-review output, or:
     #   nix-prefetch-url --unpack \
     #     https://github.com/noxthedevwindev-greatest/simpledir/archive/v${version}.tar.gz
     hash = "sha256-REPLACE_ME_WITH_THE_PREFETCH_HASH";
   };
 
-  nativeBuildInputs = [ makeWrapper ];
+  strictDeps = true;
 
-  # pure python, one executable file, nothing to compile
-  dontBuild = true;
+  # the update check, `revert` and `sdcfg releases` all shell out to curl: the
+  # C++ standard library has no TLS, and curl is already the install dependency.
+  nativeBuildInputs = [ curl makeWrapper ];
+
+  enableParallelBuilding = true;
+
+  # one source file, one compiler invocation. statically linked against
+  # libstdc++ so the binary doesn't inherit this nixpkgs' gcc into a runtime
+  # closure the size of a distro.
+  buildPhase = ''
+    runHook preBuild
+    $CXX -std=c++17 -O2 -static-libstdc++ -static-libgcc -o sd sd.cpp
+    runHook postBuild
+  '';
+
+  doCheck = true;
+
+  checkPhase = ''
+    runHook preCheck
+    # the suite needs bash and a compiler (it builds its own stub binaries) and
+    # points every network call at file:// stubs, so nothing leaves the sandbox
+    ln -sf $PWD/sd sdcfg
+    bash tests/run.sh
+    runHook postCheck
+  '';
 
   installPhase = ''
     runHook preInstall
-    install -Dm755 simpledir $out/bin/simpledir
+    install -Dm755 sd $out/bin/sd
+    ln -s sd $out/bin/sdcfg
+    install -Dm644 sd.cpp $out/share/doc/simpledir/sd.cpp
     install -Dm644 README.md $out/share/doc/simpledir/README.md
-    install -Dm644 LICENSE $out/share/doc/simpledir/LICENSE
-
-    # the shebang is /usr/bin/env python3, so the store's python has to be on PATH
-    wrapProgram $out/bin/simpledir \
-      --prefix PATH : ${lib.makeBinPath [ python3 ]}
+    install -Dm644 llms.txt $out/share/doc/simpledir/llms.txt
+    install -Dm644 install.sh $out/share/doc/simpledir/install.sh
     runHook postInstall
   '';
 
-  # the test suite is bash and needs a writable $HOME; not worth it in CI
-  doCheck = false;
+  # `sdcfg update`, `revert` and `releases` run curl through popen, because the
+  # C++ standard library has no TLS. linking curl in would be silly for one
+  # `cd`, so it stays a wrapped runtime dependency instead: without this the
+  # update check silently does nothing on a NixOS box with no curl on PATH.
+  # the wrapper execs with argv[0] preserved, so `sdcfg` still sees its own name
+  # and picks the right half.
+  postFixup = ''
+    wrapProgram $out/bin/sd --prefix PATH : ${lib.makeBinPath [ curl ]}
+  '';
 
-  meta = {
-    description = "Named directory shortcuts for the shell, without the frecency database";
+  meta = with lib; {
+    description = "Named directory shortcuts for your shell - a frecency-aware zoxide alternative";
     longDescription = ''
-      Bind names you choose to directories and jump to them with sd <name>.
-      State is a single JSON file: no frecency scoring, no database, no
-      daemon, and no dependencies beyond the Python standard library.
+      Bind names you choose to directories and jump to them, and remember the
+      ones you never named. Two commands from one binary: sd moves you and only
+      reads your config, sdcfg changes things and never moves you.
     '';
     homepage = "https://github.com/noxthedevwindev-greatest/simpledir";
-    license = lib.licenses.mit;
-    mainProgram = "simpledir";
-    platforms = lib.platforms.unix;
+    license = licenses.mit;
+    platforms = platforms.linux;
+    mainProgram = "sd";
   };
-}
+})

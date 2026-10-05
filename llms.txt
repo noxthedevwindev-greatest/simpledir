@@ -1,21 +1,21 @@
 # simpledir
 
-> Named directory shortcuts for the shell. The next zoxide: no frecency
-> database, no daemon, no dependencies. One JSON file of `name -> path`, and
-> two commands split by what they do to you.
+> Directory shortcuts for your shell. Named aliases for the places you actually
+> go, plus frecency for the ones you never named. The next zoxide, in one C++
+> file, with no interpreter and no database.
 
-`sd` moves you and only ever reads your config. `sdcfg` changes things and never
-changes your directory. Both names are the same file; the program decides which
-half it is by the name it was invoked as (`argv[0]`).
+`sd` moves you and only reads your config. `sdcfg` changes things and never
+changes your directory. Both names are the same binary; the program decides
+which half it is by the name it was invoked as (`argv[0]`).
 
-Complements, does not replace, [zoxide](https://github.com/ajeetdsouza/zoxide).
+Linux. MIT. Zero dependencies beyond libstdc++ and `curl`.
 
 ## Docs
 
 - [README.md](https://github.com/noxthedevwindev-greatest/simpledir/blob/main/README.md): full documentation
 - [AGENTS.md](https://github.com/noxthedevwindev-greatest/simpledir/blob/main/AGENTS.md): notes for coding agents working on this repository
 - [CONTRIBUTORS.md](https://github.com/noxthedevwindev-greatest/simpledir/blob/main/CONTRIBUTORS.md): authorship and how to contribute
-- [LICENSE](https://github.com/noxthedevwindev-greatest/simpledir/blob/main/LICENSE): MIT
+- [LICENSE](https://github.com/noxthedevwindev-greatent/simpledir/blob/main/LICENSE): MIT
 
 ## Install
 
@@ -23,96 +23,91 @@ Complements, does not replace, [zoxide](https://github.com/ajeetdsouza/zoxide).
 curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/main/install.sh | bash
 ```
 
-The installer checks for Python 3.8+, installs it with yay, pacman or mise (in
-that order) if missing, downloads the release asset into `~/.local/bin/sd`,
-symlinks `sdcfg` to it, and appends a guarded wrapper block to `~/.bashrc` or
-`~/.zshrc` (chosen from `$SHELL`). Re-running refreshes the block and keeps a
-backup. `bash install.sh --uninstall` reverses all of it.
+The installer detects the platform, downloads a prebuilt `sd-linux-x86_64` or
+`sd-linux-arm64` binary from the latest release, and **compiles from source if
+there isn't one** — installing a toolchain with yay, pacman or mise first if
+necessary. It appends a guarded wrapper block to `~/.bashrc` or `~/.zshrc`
+(chosen from `$SHELL`). Run it again over an existing install and it reports
+what it found and asks whether to repair, uninstall, or cancel.
 
-From source: `git clone … && make install`.
+`bash install.sh --source` forces the compile path, `--uninstall` reverses it.
+`SIMPLEDIR_BIN_DIR`, `SIMPLEDIR_RC`, `SIMPLEDIR_PM`, `SIMPLEDIR_NO_RC=1`.
 
 ## Commands
 
-`sd` — moves you, reads the config:
+`sd` — moves you, reads the config, records where you went:
 
 ```
-sd <alias>                 jump (equivalent to `sd print <alias>`)
+sd <alias>                 jump (falls back to frecency if it isn't an alias)
 sd -                       previous directory
 sd                         $HOME
 sd /some/path              a raw path, cd'd as-is
 sd ls [<query>] [--long]   list jumpable aliases; --names one per line; --json the config shape
 sd print <alias[/sub]>     print the directory without cd'ing
-sd suggest [--top N] [--json]   mine shell history for directories worth naming
+sd top [<query>] [--json]  the frecency log, best first
+sd suggest [<query>]       directories from your shell history worth naming; --top N, --json
 sd i [<query>]             interactive picker; fzf if installed, numbered list otherwise
 ```
 
 `sdcfg` — changes things, never moves you:
 
 ```
-sdcfg add [<name>] [<path>]   bind; name defaults to the directory basename, path to $PWD; --force to overwrite; --keep-symlinks to skip resolution
+sdcfg add [<name>] [<path>]   bind; name defaults to the directory basename, path to $PWD; --force; --keep-symlinks
 sdcfg rm <name>               remove an alias
-sdcfg rename <old> <new>      rename, keeping the path; --force to overwrite
-sdcfg import <dir>            bind every subdirectory of a tree; --depth (default 1), --prefix, --force, --hidden, --dry-run, --keep-symlinks
-sdcfg bind [--top N] [--dry-run]   create aliases from what `sd suggest` found
-sdcfg edit [<editor>]         open the config in $EDITOR, creating an empty one if absent
-sdcfg update                  check for a newer release, ask, then install; --check reports only (exit 1 if one exists); --yes skips the prompt
-sdcfg uninstall               remove the install; --purge also deletes ~/.simpledir and every alias; --yes skips the prompt
+sdcfg rename <old> <new>      rename, keeping the path; --force
+sdcfg import <dir>            bind every subdirectory of a tree; --depth, --prefix, --force, --hidden, --dry-run, --keep-symlinks
+sdcfg bind                    create aliases from what `sd suggest` found; --top N, --dry-run
+sdcfg forget                  drop directories from the visit log; --all, --missing, --path P, --yes
+sdcfg migrate                migrate the config file v1 -> v2; --dry-run
+sdcfg zoxide                  import the directories zoxide knows about; --bind, --top N, --dry-run
+sdcfg edit [<editor>]         open the config in $EDITOR
+sdcfg update                  check for a newer release, ask, then install; --check; --yes; --to vX.Y.Z
+sdcfg revert                  go back to the previously installed version; --to vX.Y.Z
+sdcfg releases                list the published releases
+sdcfg uninstall               remove the binaries and the shell wrapper; --purge; --yes
 sdcfg doctor                  report config, dead aliases, shell wiring and PATH problems; exit 1 if any
 sdcfg completions bash|zsh    print a shell completion script
-sdcfg init                    print the shell wrapper to append to a shell rc file
+sdcfg init                    print the shell wrapper
 ```
 
 Exit codes: `0` success, `1` unknown alias or user error, `2` argument parsing
-error (argparse).
+or unknown-verb error.
 
-All flags are long-form only; there are no short aliases.
-
-Reaching for the wrong half is a usage error (exit 2) and gets a pointer:
-`sd add` prints `did you mean 'sdcfg add'? sd only reads your config.`
+All flags are long-form only; there are no short aliases. Reaching for the wrong
+half is exit 2 and gets a pointer: `sd add` prints
+`did you mean 'sdcfg add'? sd only reads your config.`
 
 An alias argument may carry a path suffix: `dots/src` resolves to `<dots>/src`.
-Suffixes are normalized with `normpath`, so `dots/src/..` and `dots/` both work.
-The shell wrapper also accepts a raw path: `sd /some/path` just `cd`s.
+An exact alias name always wins; otherwise a **unique name prefix** is accepted
+(`hy` jumps to `hypr`), and two or more candidates is an error listing them,
+never a guess. An absolute path is never an alias and says so.
 
-An exact alias name always wins. If there is no exact match, a **unique name
-prefix** is accepted: `hy` jumps to `hypr`. Two or more candidates is an error
-that lists them, never a guess.
+## Frecency
 
-## History mining
+`sd <word>` falls back to the visit log when the word isn't an alias, so
+`sd wev` finds a directory you never named.
 
-`sd suggest` reads `~/.bash_history`, `~/.zsh_history` and the fish history files
-(`SIMPLEDIR_HISTORY=/path` adds another file), and understands bash plain lines,
-zsh extended history (`: <time>:<dur>;<cmd>`) and fish (`- cmd: <cmd>`). It
-extracts directories from `cd`, `pushd` and `z`, including `cd a b` and `cd -x /p`,
-and ignores bare `cd`, `cd -`, `~`, and anything that is not an existing
-directory. `cd` only counts at the start of a command or after a separator
-(`&&`, `||`, `;`, `|`, …), so `echo cd /tmp` is not a suggestion.
+Scoring: a three-day half-life, computed lazily at read time, so nothing runs in
+the background. The log is written at most once per directory per minute,
+pruned of anything that has faded below 0.02, and capped at 500 entries.
+Matching skips directories that have a name — if you named it, `sd name` is the
+way in. Recording does not skip them, so `sd top` shows real activity.
 
-Relative history targets (`cd Projects`) are resolved against `$HOME`, since the
-directory they were typed from is not recorded anywhere. They are skipped when
-that path does not exist.
-
-It counts how often each directory appears, drops the ones already bound, ranks
-by frequency, and prints a list plus ready-to-paste `sdcfg add` lines. `sdcfg
-bind` creates them, naming each after its own directory and de-duplicating
-collisions with a numeric suffix.
-
-## Symlinks
-
-`add` and `import` resolve symlinks unless `--keep-symlinks` is given, which
-stores `os.path.abspath` instead of `Path.resolve()`. Reading an alias always
-uses `as_stored()`, which never resolves: a path bound with `--keep-symlinks`
-stays symlinked for the life of the alias.
+Disable with `SIMPLEDIR_NO_HISTORY=1` or `"history": false` in the config.
+`sdcfg forget --all` wipes it.
 
 ## Configuration
 
-Path: `~/.simpledir/config.json`. Override the directory with the
-`SIMPLEDIR_CONFIG_DIR` environment variable. The file is plain JSON and safe to
-edit by hand.
+`~/.simpledir/` holds two files:
+
+- `config.json` — yours. plain JSON, hand-editable, or `sdcfg edit`
+- `history.json` — the tool's. frecency counts. `sdcfg forget` is the honest way
+  to change it
 
 ```json
 {
-  "version": 1,
+  "version": 2,
+  "history": true,
   "aliases": {
     "dots": "/home/you/dotfiles",
     "hypr": "/home/you/.config/hypr"
@@ -120,16 +115,26 @@ edit by hand.
 }
 ```
 
-Schema: `version` is an integer, currently `1`. `aliases` maps a non-empty alias
-name to an absolute directory path. Writes are atomic: temporary file plus
-`os.replace`.
+`version: 1` configs are read as-is. `sdcfg migrate` migrates one to version 2:
+it backs the file up first, keeps every alias exactly as it was, and creates an
+empty history file. `--dry-run` shows what it would do. A config from a *newer*
+simpledir is refused with an explanation rather than half-read.
+
+`SIMPLEDIR_CONFIG_DIR` moves the whole directory elsewhere.
+
+## Coming from zoxide
+
+`sdcfg zoxide` reads zoxide's sqlite database (`$ZO_DATA_DIR/db.zdb`, or
+`~/.zoxide.db`) and prints its top directories as `sdcfg add` lines; `--bind`
+creates them. It needs the `sqlite3` command on `PATH`. If zoxide's database is
+missing or unreadable it says where it looked.
 
 ## Shell wrapper
 
 A subprocess cannot change the calling shell's cwd, so `sdcfg init` prints a
 function that performs the `cd`, using `sd print` to resolve the path. The
-function intercepts only bare aliases; `ls`, `print`, `suggest` and `i` are
-forwarded to the binary without changing directory, as is any `-flag`.
+function forwards `ls`, `print`, `suggest`, `i` and `top` to the binary without
+changing directory, as does any `-flag`.
 
 - no arguments: `cd $HOME`
 - `-`: `cd $OLDPWD`
@@ -140,30 +145,29 @@ interactive shells.
 
 ## Behavior on errors
 
-- unknown alias: message with substring and `difflib` suggestions, exit `1`
-- alias or alias-with-suffix resolving to a missing directory: `jump` refuses and
-  explains how to rebind; `ls` tags it `[missing]`
+- unknown alias: substring and similarity suggestions, exit `1`
+- unknown alias with no frecency match: both are tried before giving up
+- alias or alias-with-suffix resolving to a missing directory: refused, with the
+  rebind command; `ls` tags it `[missing]`
 - duplicate alias: refused unless `--force`, for both `add` and `rename`
-- corrupt or unreadable config: explains the problem, suggests removal, does not
-  silently reset
-- `ls` with no aliases: usage hint on stderr, exit `1`
-- `ls <query>` with no match: says so, exit `1`
-- unknown flag, or a verb belonging to the other command: argparse usage error,
-  exit `2`, with a pointer to the right command
+- corrupt config: explains the problem, suggests removal, does not silently reset
+- corrupt history log: ignored. a bad visit log must not stop a `cd`
+- a failed history write: ignored, for the same reason
+- `ls` with no aliases, or a filter that matches nothing: says so, exit `1`
+- unknown flag or a verb belonging to the other command: exit `2`, with a pointer
 - `update` when GitHub is unreachable: says so, exit `1`
 - `update` never replaces a binary with a same-version or unidentifiable download
-- `uninstall` without a terminal and without `--yes`: refuses rather than
-  guessing, exit `1`
+- `uninstall` without a terminal and without `--yes`: refuses rather than guessing
 
-## Update mechanism
+## Update and revert
 
-`update` fetches `https://api.github.com/repos/noxthedevwindev-greatest/simpledir/releases/latest`,
-compares `tag_name` against `VERSION`, and on a newer tag downloads the release
-asset `sd`, runs it with `--version` to confirm identity and version, then
-writes it next to the target and `os.replace`s it into place.
+`update` fetches the latest release, runs the downloaded file with `--version` to
+confirm identity and version, and swaps it in atomically. Every install keeps
+the binary it replaced at `sd.previous`; `revert` puts that back, offline.
+`--to vX.Y.Z` installs a specific version.
 
-Additionally, `sd ls` and `sdcfg add` may print a one-line nudge to stderr when a
-newer release is known. It is suppressed when stderr is not a terminal, when
+Additionally `sd ls` and `sdcfg add` may print a one-line nudge when a newer
+release is known. It is suppressed when stderr is not a terminal, when
 `SIMPLEDIR_NO_UPDATE_CHECK` is set, when the cache in
 `~/.simpledir/update-check.json` is younger than 24 hours, and never on the
 `sd print` path.
@@ -171,7 +175,8 @@ newer release is known. It is suppressed when stderr is not a terminal, when
 Environment variables:
 
 ```
-SIMPLEDIR_CONFIG_DIR       config directory                (default ~/.simpledir)
+SIMPLEDIR_CONFIG_DIR       config directory                    (default ~/.simpledir)
+SIMPLEDIR_NO_HISTORY       set to anything to stop recording visits
 SIMPLEDIR_NO_UPDATE_CHECK  set to anything to disable update checks
 SIMPLEDIR_BIN              override the path `update` writes to, and `uninstall` removes
 SIMPLEDIR_RC               the only rc file `uninstall` and `doctor` will touch
@@ -185,50 +190,45 @@ SIMPLEDIR_UPDATE_ASSET_URL override the downloaded asset URL (used by the test s
 
 `sdcfg uninstall` removes the binary at `install_target()` and strips every
 `# >>> simpledir >>>` … `# <<< simpledir <<<` span from the rc files in
-`rc_candidates()`, rewriting each through a staged file and leaving a
-`<rc>.bak.<timestamp>` backup. Aliases in `~/.simpledir` are preserved unless
-`--purge` is given. Deleting the running script is safe on unix.
+`rc_candidates()`, leaving a `<rc>.bak.<timestamp>` backup. Aliases are
+preserved unless `--purge` is given. Deleting the running binary is safe on unix.
 
 `SIMPLEDIR_RC`, when set, is exclusive: it names the only rc file considered.
-Without it, candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc`
-and `~/.config/fish/config.fish`.
+Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
+`~/.config/fish/config.fish`.
 
 ## Version history
 
-- 5.0.0 — split into two commands: `sd` (moves, read-only) and `sdcfg` (writes,
-  never moves). Long-form flags only; the short forms are gone. `suggest --bind`
-  became `sdcfg bind`. Breaking change to the command surface; the config format
-  is unchanged at `version: 1`.
-- 4.0.0 — `suggest` (history mining), `i` (interactive picker, fzf optional),
-  `add`/`import --keep-symlinks`, and unique-prefix matching on jump. Reading an
-  alias no longer resolves symlinks.
-- 3.1.0 — `uninstall`: removes its own binary and the wrapper block, keeping
-  aliases unless `--purge`.
-- 3.0.0 — one-command `curl | bash` installer, `update` with verification and
-  atomic self-install, a quiet once-a-day update nudge, `import`, `doctor`,
-  downloadable release assets.
+- 6.0.0 — rewritten in C++ (one file, no interpreter; 73 ms → 0.8 ms per jump),
+  frecency so it remembers directories you never named, `sd top`, `sdcfg forget`,
+  config version 2 with `sdcfg migrate`, `sdcfg zoxide` to import from zoxide,
+  `sdcfg revert` and `--to`, `sdcfg releases`, and an installer that detects the
+  platform, downloads or compiles, and asks before touching an existing install.
+- 5.0.0 — split into `sd` (moves, read-only) and `sdcfg` (writes, never moves).
+- 4.0.0 — `suggest`, `i`, `--keep-symlinks`, unique-prefix matching.
+- 3.1.0 — `uninstall`.
+- 3.0.0 — `curl | bash` installer, `update`, `import`, `doctor`, release assets.
 - 1.0.0 — `add`, `rm`, `ls`, `jump`, `init`, the shell wrapper, typo
   suggestions, atomic config writes.
-- 2.0.0 — path suffixes, `rename`, `add` with fewer arguments, `edit`, `ls`
-  filtering, `--names`, `--json`, shell completions.
 
 ## Development
 
 ```
-make test     # 235 assertions, runs real bash subprocesses
-make assets   # build dist/ (sd + install.sh, mode 755)
-make release  # tag from VERSION, push, publish with assets
-vhs docs/demo.tape   # re-record docs/demo.gif (needs vhs and ttyd)
+make        # one g++ invocation over one file
+make test   # 287 assertions against the compiled binary, no network
+make assets # dist/ (the binary, sd.cpp, install.sh, mode 755)
+make release
 ```
 
 Repository layout:
 
 ```
-sd                 the entire tool, one executable file. installed as `sd` with `sdcfg` symlinked to it
-install.sh         the curl | bash installer
-tests/run.sh       test suite, plain bash
-docs/demo.tape     vhs script that produces docs/demo.gif
-packaging/PKGBUILD Arch package definition
-packaging/nix/     a nixpkgs expression
-Makefile           install / uninstall / test / assets / release targets
+sd.cpp              the entire program. installed as `sd`, with `sdcfg` symlinked to it
+sd                  build output, gitignored
+install.sh          the curl | bash installer
+tests/run.sh        test suite, plain bash, drives the compiled binary
+docs/demo.tape      vhs script that produces docs/demo.gif
+packaging/PKGBUILD  Arch package definition
+packaging/nix/      a nixpkgs expression
+Makefile            binaries / install / uninstall / test / assets / release
 ```

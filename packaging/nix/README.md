@@ -1,65 +1,56 @@
 # nixpkgs packaging for simpledir
-#
-# to submit: create a PR from your fork of nixpkgs, or let the bot do it.
-# the bot is the easy way and nobody has to review your code:
-#
-#   1. put these two files in a repo (this one is fine)
-#   2. add a workflow that runs nixpkgs-review, OR just use the web app:
-#      https://github.com/Mic92/nixpkgs-review#web-interface
-#      -> paste the repo + branch, it opens the PR for you
-#
-# it needs a `meta.mainProgram`, which is what makes `nix run` work, and
-# wrapProgram because the tool prints a shell snippet that has to be eval'd:
-# after `nix profile install simpledir` add
-#
-#   eval "$(simpledir init)"
-#
-# to your shell rc. that is opt-in on purpose: a package install should never
-# edit your rc file behind your back.
 
-{ lib
-, buildPythonApplication
-, python3
-}:
+`package.nix` is the real expression. `flake.nix` wraps it so you can
+`nix run` / `nix develop` from a checkout without wiring anything up.
 
-buildPythonApplication rec {
-  pname = "simpledir";
-  version = "4.0.0";
+## what it packages
 
-  src = fetchFromGitHub {
-    owner = "noxthedevwindev-greatest";
-    repo = "simpledir";
-    rev = "v${version}";
-    hash = "sha256-0000000000000000000000000000000000000000000000000000=";
-  };
+v6 is one C++ file and a `curl` dependency:
 
-  # pure python, no dependencies, no build step
-  format = "pyproject";
-  nativeBuildInputs = [ python3 ];
+- `buildPhase` is a single `$CXX -std=c++17 -O2` over `sd.cpp`, statically
+  linked against libstdc++ so the runtime closure doesn't drag in a whole gcc
+- `sd` goes in `$out/bin/sd` and `sdcfg` is a **symlink** to it. the program
+  picks which half it is from `argv[0]`, so there is one file and two names —
+  don't install a second copy
+- `curl` is wrapped onto `PATH` with `wrapProgram` rather than linked, because
+  the standard library has no TLS and `sdcfg update` shells out to it. without
+  the wrapper the update check silently does nothing on a NixOS box
 
-  # the whole program is one executable file
-  installPhase = ''
-    runHook preInstall
-    install -Dm755 simpledir $out/bin/simpledir
-    install -Dm644 README.md $out/share/doc/simpledir/README.md
-    install -Dm644 LICENSE $out/share/doc/simpledir/LICENSE
-    runHook postInstall
-  '';
+## after installing
 
-  # there is nothing to import as a library, so `pyproject`'s default checks
-  # have nothing to do. the test suite is bash.
-  doCheck = false;
+a package install must not edit your rc file, so the wrapper is opt-in:
 
-  meta = with lib; {
-    description = "Named directory shortcuts for the shell - a database-free zoxide alternative";
-    longDescription = ''
-      Bind names you choose to directories and jump to them with `sd <name>`.
-      State is a single JSON file; there is no frecency database, no daemon
-      and no dependencies beyond the Python standard library.
-    '';
-    homepage = "https://github.com/noxthedevwindev-greatest/simpledir";
-    license = licenses.mit;
-    mainProgram = "simpledir";
-    platforms = platforms.unix;
-  };
-}
+```bash
+nix profile install nixpkgs#simpledir   # or: nix run .
+eval "$(sdcfg init)" >> ~/.bashrc       # once
+```
+
+`sdcfg init` prints a block that survives being `eval`'d — see rule 14 in the
+top-level `AGENTS.md`; it is glob-free and semicolon-terminated on purpose.
+
+## submitting it to nixpkgs
+
+the bot is the easy way and nobody has to review your code:
+
+1. put `package.nix` in a repo (this one is fine) on a branch
+2. open https://github.com/Mic92/nixpkgs-review#web-interface and paste the
+   repo + branch; it opens the PR for you
+
+`meta.mainProgram = "sd"` is what makes `nix run` work — keep it.
+
+## before you send it
+
+the one thing that always blocks a first submission is the `hash` in
+`fetchFromGitHub`. get it with:
+
+```bash
+nix-prefetch-url --unpack \
+  https://github.com/noxthedevwindev-greatest/simpledir/archive/v6.0.0.tar.gz
+```
+
+or just read it out of the `nixpkgs-review` run and paste it in. a placeholder
+hash fails the build, it doesn't warn.
+
+`doCheck` is on and runs `tests/run.sh`, which compiles its own stub binaries
+and points every network call at `file://` URLs, so the check phase neither
+needs the network nor a `checkInputs` list beyond bash and a compiler.

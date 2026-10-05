@@ -1,8 +1,7 @@
-__pycache__/
-*.pyc
-*.gif
-!docs/demo.gif
-.DS_Store
-
-# release staging: `make assets` fills this, the release uploads from here
+# sd is build output, not source. sd.cpp is the source.
+sd
+sdcfg
 dist/
+__pycache__/
+*.o
+.DS_Store
