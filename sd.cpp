@@ -46,7 +46,7 @@
 namespace fs = std::filesystem;
 
 #ifndef VERSION
-#define VERSION "6.1.0"
+#define VERSION "6.2.0"
 #endif
 #define CONFIG_VERSION 2
 
@@ -74,7 +74,12 @@ std::string g_prog = MOVE;
 std::string g_mode = MOVE;
 std::string g_owner = "noxthedevwindev-greatest";
 std::string g_repo = g_owner + "/simpledir";
-std::string g_api = "https://api.github.com/repos/noxthedevwindev-greatest/simpledir";
+// the releases *list*, not the repository object. this url had no /releases on
+// the end of it, so every check fetched the repo json, found no tag_name in it,
+// and reported "couldn't reach GitHub" — which is what it said, while being
+// perfectly able to reach it.
+std::string g_api =
+    "https://api.github.com/repos/noxthedevwindev-greatest/simpledir/releases";
 std::string g_releases = "https://github.com/noxthedevwindev-greatest/simpledir/releases";
 
 // the asset name carries the architecture, and it has to match what `make assets`
@@ -339,6 +344,7 @@ struct Json {
   static JsonPtr make_bool(bool b) { auto j = std::make_shared<Json>(); j->kind = Kind::Bool; j->boolean = b; return j; }
 
   bool is_obj() const { return kind == Kind::Obj; }
+  bool is_arr() const { return kind == Kind::Arr; }
   bool is_num() const { return kind == Kind::Num; }
   bool is_str() const { return kind == Kind::Str; }
 
@@ -1756,38 +1762,37 @@ struct Release {
 
 std::vector<Release> releases(int limit) {
   std::string url = env_or("SIMPLEDIR_UPDATE_URL", g_api);
-  std::string body = run_capture("curl -fsSL --connect-timeout 15 " + shell_quote(url) +
-                                     " 2>/dev/null",
-                                 nullptr);
+  std::string body =
+      run_capture("curl -fsSL --connect-timeout 15 " + shell_quote(url) + " 2>/dev/null", nullptr);
   if (trim(body).empty()) return {};
+
+  // Parse it with the parser this file already has. The hand-rolled scan this
+  // replaces looked for the next `}` after each `{` — and github's release
+  // objects contain a literal `{?name,label}` inside the `upload_url` *string*,
+  // so every object was cut short at 334 characters, long before `tag_name`.
+  // The result was that releases(), and therefore update, update --check,
+  // releases and the daily nudge, had never once parsed a real response.
+  JsonPtr root;
+  try {
+    root = json_parse(body);
+  } catch (const UserError&) {
+    return {};
+  }
+  if (!root || !root->is_arr()) return {};
+
   std::vector<Release> out;
-  // a hand-rolled scan: the API returns a JSON array of objects and we only
-  // want three fields out of each
-  size_t i = 0;
-  while (i < body.size() && static_cast<int>(out.size()) < limit) {
-    size_t obj = body.find('{', i);
-    if (obj == std::string::npos) break;
-    size_t end = body.find('}', obj);
-    if (end == std::string::npos) break;
-    std::string chunk = body.substr(obj, end - obj);
+  for (const JsonPtr& entry : root->arr) {
+    if (!entry || !entry->is_obj()) continue;
+    JsonPtr tag = entry->get("tag_name");
+    if (!tag) continue;
     Release r;
-    for (const char* field : {"tag_name", "published_at", "name"}) {
-      std::string needle = std::string("\"") + field + "\"";
-      size_t at = chunk.find(needle);
-      if (at == std::string::npos) continue;
-      size_t colon = chunk.find(':', at);
-      if (colon == std::string::npos) continue;
-      size_t quote1 = chunk.find('"', colon);
-      if (quote1 == std::string::npos) continue;
-      size_t quote2 = chunk.find('"', quote1 + 1);
-      if (quote2 == std::string::npos) continue;
-      std::string value = chunk.substr(quote1 + 1, quote2 - quote1 - 1);
-      if (std::string(field) == "tag_name") r.tag = value;
-      else if (std::string(field) == "published_at") r.published = value.substr(0, 10);
-      else r.name = value;
-    }
-    if (!r.tag.empty()) out.push_back(r);
-    i = end + 1;
+    r.tag = tag->as_str();
+    if (r.tag.empty()) continue;
+    if (JsonPtr published = entry->get("published_at"))
+      r.published = published->as_str().substr(0, 10);
+    if (JsonPtr name = entry->get("name")) r.name = name->as_str();
+    out.push_back(r);
+    if (static_cast<int>(out.size()) >= limit) break;
   }
   return out;
 }

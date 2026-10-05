@@ -457,9 +457,15 @@ rm -rf "$V1" "$V9" "$FR" "$FR2" "$FR3"
 # --- sdcfg update (offline: file:// stubs) -----------------------------------
 STUBS=$(mktemp -d)
 me=$("$CFG" --version | awk '{print $2}')
-printf '{"tag_name": "v99.0.0"}' > "$STUBS/api_new.json"
-printf '{"tag_name": "v%s"}' "$me"   > "$STUBS/api_same.json"
-printf '{"tag_name": "v0.0.1"}'       > "$STUBS/api_old.json"
+# the shape the endpoint actually returns: an array of release objects. these were
+# bare objects, which the old hand-rolled scanner happened to accept and a real
+# parser rightly refuses.
+printf '[{"tag_name":"v99.0.0","published_at":"2026-01-01T00:00:00Z","name":"new"}]\n' \
+  > "$STUBS/api_new.json"
+printf '[{"tag_name":"v%s","published_at":"2026-01-01T00:00:00Z","name":"same"}]\n' "$me" \
+  > "$STUBS/api_same.json"
+printf '[{"tag_name":"v0.0.1","published_at":"2026-01-01T00:00:00Z","name":"old"}]\n' \
+  > "$STUBS/api_old.json"
 
 export SIMPLEDIR_UPDATE_URL="file://$STUBS/api_new.json"
 contains "update sees a newer release" "v99.0.0" "$CFG" update --check
@@ -586,6 +592,55 @@ contains "--to warns the legacy build can't return" "cannot bring you back" \
 check "--to installed the legacy build" 0 bash -c \
   "'$REL/installed-v4' --version | grep -q 'simpledir 4.0.0'"
 rm -f "$REL/legacy.cpp"
+
+# The url the tool actually asks for. Two bugs hid here and neither was visible
+# to a test: the release list url had no `/releases` on the end of it, so every
+# check fetched the *repository* object and found no tag_name in it; and the
+# hand-rolled json scan it used to read the answer cut every object short at the
+# `{?name,label}` that sits inside the upload_url string. Both reported the same
+# thing — "couldn't reach GitHub" — while reaching github perfectly well.
+# A spy on curl is the only thing that sees either.
+SPY=$(mktemp -d)
+cat > "$SPY/curl" <<'SPYEOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$SPY_LOG"
+cat "$SPY_BODY"
+SPYEOF
+chmod +x "$SPY/curl"
+SPY_LOG=$(mktemp)
+SPY_BODY=$(mktemp)
+# the second entry carries `{?name,label}` inside a string value, exactly as
+# github's upload_url does. that is what truncated the old scanner.
+cat > "$SPY_BODY" <<'BODYEOF'
+[
+  { "tag_name": "v9.9.9", "published_at": "2026-02-02T00:00:00Z", "name": "spy" },
+  {
+    "upload_url": "https://uploads.github.com/repos/o/r/releases/1/assets{?name,label}",
+    "tag_name": "v9.9.8",
+    "published_at": "2026-01-01T00:00:00Z",
+    "name": "braces inside a string"
+  }
+]
+BODYEOF
+
+spy() { env PATH="$SPY:$PATH" SPY_LOG="$SPY_LOG" SPY_BODY="$SPY_BODY" "$CFG" "$@"; }
+contains "releases parses a real api body" "v9.9.9" spy releases
+contains "releases survives braces inside strings" "v9.9.8" spy releases
+contains "releases shows dates"             "2026-02-02" spy releases
+: > "$SPY_LOG"
+spy update --check >/dev/null 2>&1
+check "the release list url ends in /releases" 0 grep -q '/releases' "$SPY_LOG"
+lacks   "the release list url is not the repo object" 'simpledir$' "$SPY_LOG"
+check   "the update check asked exactly once"    0 bash -c "[[ \$(grep -c 'releases' '$SPY_LOG') -eq 1 ]]"
+
+# a body that is valid json but not a list of releases must not be reported as
+# "couldn't reach github"
+printf '{"id":1,"full_name":"noxthedevwindev-greatest/simpledir"}\n' > "$SPY_BODY"
+lacks   "a repo object is not mistaken for releases" "published releases" spy releases
+contains "a repo object is reported as unusable" "couldn't reach GitHub" spy releases
+printf 'not json at all\n' > "$SPY_BODY"
+check   "garbage from the api is handled" 1 spy releases
+rm -rf "$SPY" "$SPY_LOG" "$SPY_BODY"
 
 # --to must not need the release list, so an unreachable api can't block it
 printf '[]\n' > "$REL/api.json"

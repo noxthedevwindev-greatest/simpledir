@@ -274,6 +274,24 @@ want there anyway.
 tested on bash 5.2. the wrapper only uses portable constructs, so zsh should be
 fine, but that's untested — tell me if it breaks.
 
+## what's new in 6.2
+
+**the update check had never worked. not once.** two bugs, stacked, both
+reporting the same lie — "couldn't reach GitHub" — while reaching GitHub
+perfectly well:
+
+1. the release-list URL had no `/releases` on the end of it, so every check
+   fetched the *repository* object and looked for `tag_name` inside it
+2. the hand-rolled JSON scan that read the answer cut each object short at the
+   literal `{?name,label}` that sits inside github's `upload_url` **string**
+
+so `sdcfg update`, `sdcfg update --check`, `sdcfg releases` and the daily nudge
+have all been silently doing nothing since 6.0.0. they now use the JSON parser
+this file already had, and they work — verified against the real API.
+
+the nudge was the worst of it, because it swallows errors on purpose: a feature
+designed to be silent was hiding a total failure.
+
 ## what's new in 6.1
 
 `update --to` and `revert` work now. in 6.0.0 they were wired to the wrong asset
@@ -455,7 +473,7 @@ else with `SIMPLEDIR_BIN=/path/to/sd`.
 
 ```bash
 make                # build: one g++ invocation over one file
-make test           # 322 assertions, real bash subprocesses, no network
+make test           # 331 assertions, real bash subprocesses, no network
 make assets         # dist/ for a release: the binary, sd.cpp, install.sh
 make release        # tag, push, publish with assets attached
 vhs docs/demo.tape  # re-record the gif above (needs vhs + ttyd)

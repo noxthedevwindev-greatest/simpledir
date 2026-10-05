@@ -199,6 +199,11 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ## Version history
 
+- 6.2.0 — the release check works at all: the API url was missing `/releases`
+  so it fetched the repository object, and the hand-rolled json scan it read the
+  answer with truncated every object at a `{?name,label}` inside a string.
+  `update`, `update --check`, `releases` and the update nudge had never once
+  succeeded.
 - 6.1.0 — `update --to` and `revert` actually work: the
   release URL is built from the architecture, the release list is no longer a
   prerequisite, every historical asset name is tried, and a legacy build that
@@ -219,7 +224,7 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ```
 make        # one g++ invocation over one file
-make test   # 322 assertions against the compiled binary, no network
+make test   # 331 assertions against the compiled binary, no network
 make assets # dist/ (the binary, sd.cpp, install.sh, mode 755)
 make release
 ```
