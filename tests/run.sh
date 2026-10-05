@@ -604,6 +604,51 @@ check "--to installed the legacy build" 0 bash -c \
   "'$REL/installed-v4' --version | grep -q 'simpledir 4.0.0'"
 rm -f "$REL/legacy.cpp"
 
+# v1.0.0 and v2.0.0 were never given a release asset at all, but the program is in
+# the tag as one executable file. Fall back to the source of the tag so `--to`
+# keeps its promise for every published version, and say where it came from.
+mkdir -p "$REL/raw/noxthedevwindev-greatest/simpledir/v2.0.0"
+if command -v g++ >/dev/null 2>&1; then
+  cat > "$REL/legacy2.cpp" <<'LEOF'
+#include <cstdio>
+#include <cstring>
+int main(int argc, char** argv) {
+  for (int i = 1; i < argc; i++)
+    if (strcmp(argv[i], "--version") == 0) { printf("simpledir 2.0.0 - the next zoxide\n"); return 0; }
+  return 0;
+}
+LEOF
+  g++ -std=c++17 -O1 -o "$REL/raw/noxthedevwindev-greatest/simpledir/v2.0.0/simpledir" \
+      "$REL/legacy2.cpp" 2>/dev/null
+fi
+contains "--to falls back to the source of the tag" "source file from" \
+  env SIMPLEDIR_RELEASE_URL="file://$REL" SIMPLEDIR_SOURCE_URL="file://$REL/raw" \
+      SIMPLEDIR_BIN="$REL/installed-src" SIMPLEDIR_NO_UPDATE_CHECK=1 \
+      "$CFG" update --to v2.0.0
+contains "--to installed the source fallback" "done" \
+  env SIMPLEDIR_RELEASE_URL="file://$REL" SIMPLEDIR_SOURCE_URL="file://$REL/raw" \
+      SIMPLEDIR_BIN="$REL/installed-src" SIMPLEDIR_NO_UPDATE_CHECK=1 \
+      "$CFG" update --to v2.0.0
+
+# a tag whose file disagrees with the tag name is reported, not papered over. the
+# real v1.0.0 tag contains a program whose --version says 2.0.0, and silently
+# believing either number is how you end up not trusting the tool.
+mkdir -p "$REL/raw/noxthedevwindev-greatest/simpledir/v1.5.0"
+if command -v g++ >/dev/null 2>&1; then
+  sed 's/2\.0\.0/1.4.0/' "$REL/legacy2.cpp" > "$REL/legacy3.cpp"
+  g++ -std=c++17 -O1 -o "$REL/raw/noxthedevwindev-greatest/simpledir/v1.5.0/simpledir" \
+      "$REL/legacy3.cpp" 2>/dev/null
+fi
+out=$(env SIMPLEDIR_RELEASE_URL="file://$REL" SIMPLEDIR_SOURCE_URL="file://$REL/raw" \
+      SIMPLEDIR_BIN="$REL/installed-mismatch" SIMPLEDIR_NO_UPDATE_CHECK=1 \
+      "$CFG" update --to v1.5.0 2>&1)
+has "a version mismatch is reported"     "you asked for v1.5.0"  "$out"
+has "a version mismatch names both"      "says 1.4.0"           "$out"
+has "a version mismatch explains why"    "version string"       "$out"
+check "the mismatched build was installed anyway" 0 bash -c \
+  "'$REL/installed-mismatch' --version | grep -q 1.4.0"
+rm -f "$REL/legacy2.cpp" "$REL/legacy3.cpp"
+
 # The url the tool actually asks for. Two bugs hid here and neither was visible
 # to a test: the release list url had no `/releases` on the end of it, so every
 # check fetched the *repository* object and found no tag_name in it; and the

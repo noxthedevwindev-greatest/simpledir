@@ -46,7 +46,7 @@
 namespace fs = std::filesystem;
 
 #ifndef VERSION
-#define VERSION "6.3.0"
+#define VERSION "6.4.0"
 #endif
 #define CONFIG_VERSION 2
 
@@ -1862,15 +1862,27 @@ int install_release(const std::string& tag, bool allow_older) {
   // The asset name has changed twice, so try every spelling we have ever used,
   // newest first: sd-linux-<arch> from v6.0.0, sd from v5.0.0, and simpledir from
   // v3.0.0. Without this `--to v5.0.0` 404s while the version sits right there.
-  std::vector<std::string> urls;
+  // Each candidate remembers where it came from, so the message afterwards doesn't
+  // have to guess from the hostname — which also meant it stayed silent whenever
+  // SIMPLEDIR_SOURCE_URL pointed anywhere but raw.githubusercontent.com.
+  std::vector<std::pair<std::string, bool>> urls;  // url, from_source
   if (const char* override = std::getenv("SIMPLEDIR_UPDATE_ASSET_URL")) {
-    urls.push_back(override);
+    urls.emplace_back(override, false);
   } else {
     std::string stem = tag == "latest" ? base + "/latest/download/"
                                        : base + "/download/" + tag + "/";
-    urls.push_back(stem + asset_name());
-    urls.push_back(stem + "sd");
-    urls.push_back(stem + "simpledir");
+    urls.emplace_back(stem + asset_name(), false);
+    urls.emplace_back(stem + "sd", false);
+    urls.emplace_back(stem + "simpledir", false);
+    // v1.0.0 and v2.0.0 were never given a release asset at all, but the program
+    // is right there in the tag: one executable file, mode 755, called `simpledir`
+    // (and `sd` from v5.0.0). Going back to the source of the tag is the last
+    // resort, so `--to v2.0.0` does what it says instead of explaining that the
+    // version exists and then refusing to install it.
+    std::string raw = env_or("SIMPLEDIR_SOURCE_URL", "https://raw.githubusercontent.com/");
+    if (raw.size() && raw.back() == '/') raw.pop_back();
+    urls.emplace_back(raw + "/" + g_repo + "/" + tag + "/sd", true);
+    urls.emplace_back(raw + "/" + g_repo + "/" + tag + "/simpledir", true);
   }
 
   std::string target = install_target();
@@ -1878,20 +1890,29 @@ int install_release(const std::string& tag, bool allow_older) {
   fs::create_directories(fs::path(target).parent_path(), ec);
   std::string staged = target + ".new." + std::to_string(static_cast<long>(getpid()));
 
-  std::string url = urls.front();
+  std::string url = urls.front().first;
   bool fetched = false;
-  for (const std::string& candidate : urls) {
-    if (download(candidate, staged)) {
-      url = candidate;
+  bool from_source = false;
+  for (const auto& candidate : urls) {
+    if (download(candidate.first, staged)) {
+      url = candidate.first;
+      from_source = candidate.second;
       fetched = true;
       break;
     }
   }
   if (!fetched) {
+    std::vector<std::string> tried;
+    for (const auto& candidate : urls) tried.push_back(candidate.first);
     fs::remove(staged, ec);
-    die("download failed for " + tag + ":\n  tried " + join(urls, "\n         ") +
-        "\n  if that tag exists, it predates v3.0.0 and shipped no binary at all;\n"
-        "  otherwise " + CONFIG + " releases lists what does");
+    die("download failed for " + tag + ":\n  tried " + join(tried, "\n         ") +
+        "\n  check the tag with " + CONFIG + " releases");
+  }
+  // Say where it actually came from. Only worth a line when that isn't obvious:
+  // a source fallback is normal for the very old releases and alarming otherwise.
+  if (from_source) {
+    std::cout << "  that release has no binary attached, so this is the source file from"
+              << " the tag\n";
   }
 
   // verify before we replace a working install
@@ -1929,6 +1950,20 @@ int install_release(const std::string& tag, bool allow_older) {
     return 0;
   }
 
+  // Running the download with --version is how we know it's the right program, so
+  // use it for this too: the v1.0.0 tag was cut from a commit whose VERSION
+  // already said 2.0.0, so `--to v1.0.0` installs a file that calls itself 2.0.0.
+  // Installing what the tag actually contains is right; saying nothing about it
+  // is not.
+  std::string wanted = tag == "latest" ? "" : trim(tag);
+  if (!wanted.empty() && starts_with(wanted, "v")) wanted = wanted.substr(1);
+  if (!wanted.empty() && got_version != wanted) {
+    std::cout << "  note: you asked for " << tag << ", and that release's own --version says "
+              << got_version << ".\n"
+              << "  the tag was cut from a commit whose version string had already moved on."
+              << " installing what\n"
+              << "  " << tag << " actually contains.\n";
+  }
   if (path_exists(target)) {
     std::error_code copy_ec;
     fs::copy_file(target, target + ".previous", fs::copy_options::overwrite_existing, copy_ec);

@@ -274,6 +274,30 @@ want there anyway.
 tested on bash 5.2. the wrapper only uses portable constructs, so zsh should be
 fine, but that's untested — tell me if it breaks.
 
+## what's new in 6.4
+
+**`--to` works for every version ever published, including the two that have no
+binary at all.** v1.0.0 and v2.0.0 were never given a release asset — but the
+program is right there in the tag, one executable file called `simpledir`. so
+`--to` falls back to the source of the tag and tells you that's what it did:
+
+```
+$ sdcfg update --to v2.0.0
+  that release has no binary attached, so this is the source file from the tag
+```
+
+and if the tag's own `--version` disagrees with the tag name, it says so instead
+of quietly believing one of them:
+
+```
+  note: you asked for v1.0.0, and that release's own --version says 2.0.0.
+  the tag was cut from a commit whose version string had already moved on.
+```
+
+(that's a real historical mistake in this repo's tags, not a hypothetical: the
+v1.0.0 tag contains a program whose VERSION string says 2.0.0. it stays that way
+— rewriting a published tag helps nobody.)
+
 ## what's new in 6.3
 
 your config file was mode `744` — executable. `write_atomic` asked for
@@ -480,7 +504,7 @@ else with `SIMPLEDIR_BIN=/path/to/sd`.
 
 ```bash
 make                # build: one g++ invocation over one file
-make test           # 334 assertions, real bash subprocesses, no network
+make test           # 340 assertions, real bash subprocesses, no network
 make assets         # dist/ for a release: the binary, sd.cpp, install.sh
 make release        # tag, push, publish with assets attached
 vhs docs/demo.tape  # re-record the gif above (needs vhs + ttyd)

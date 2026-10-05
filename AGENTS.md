@@ -78,10 +78,10 @@ you. keep it that way — the split is the whole ergonomic argument, and it mean
 ## before you touch anything
 
 ```bash
-make test     # 334 assertions, spawns real bash to verify the wrapper
+make test     # 340 assertions, spawns real bash to verify the wrapper
 ```
 
-it must be 334/334 (or more) before you commit. the suite drives the *compiled*
+it must be 340/340 (or more) before you commit. the suite drives the *compiled*
 binary through the same command-line surface a user does, and it covers the
 python-era behaviours too: the `cd` the wrapper actually performs, `install.sh`
 (platform refusal, asset download, compile fallback, install/uninstall round

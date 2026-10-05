@@ -199,6 +199,10 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ## Version history
 
+- 6.4.0 — `update --to` reaches every published version: v1.0.0 and v2.0.0 have
+  no release asset at all, so it falls back to the source file in the tag, and a
+  tag whose program disagrees with its own version string is reported rather than
+  papered over.
 - 6.3.0 — config and history files are 644 instead of 744; `write_atomic` asked
   for `owner_all` on the non-executable path and that bundle includes `x`.
 - 6.2.0 — the release check works at all: the API url was missing `/releases`
@@ -226,7 +230,7 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ```
 make        # one g++ invocation over one file
-make test   # 334 assertions against the compiled binary, no network
+make test   # 340 assertions against the compiled binary, no network
 make assets # dist/ (the binary, sd.cpp, install.sh, mode 755)
 make release
 ```
