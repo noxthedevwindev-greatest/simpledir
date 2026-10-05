@@ -20,7 +20,7 @@ Linux. MIT. Zero dependencies beyond libstdc++ and `curl`.
 ## Install
 
 ```
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v7.0.3/install.sh | bash
 ```
 
 The installer detects the platform, downloads a prebuilt `sd-linux-x86_64` or
@@ -207,6 +207,10 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ## Version history
 
+- 7.0.3 — the installer is pinned to its own tag and fetches `sd.cpp` from that
+  tag too. raw.githubusercontent caches by path, so the 7.0.2 fix was in git and in
+  the API and still not in what `curl … | bash` downloaded. It now also refuses an
+  asset older than itself, not only one older than what is installed.
 - 7.0.2 — the installer asked its repair/uninstall question without printing it
   (written to a read-only fd). `curl | bash` stdin is now closed in the test so the
   `/dev/tty` path is the one exercised, and the prompt must be displayed.
@@ -252,7 +256,7 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ```
 make        # one g++ invocation over one file
-make test   # 392 assertions against the compiled binary, no network
+make test   # 397 assertions against the compiled binary, no network
 make assets # dist/ (the binary, sd.cpp, install.sh, mode 755)
 make release
 ```

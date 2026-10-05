@@ -46,8 +46,17 @@
 namespace fs = std::filesystem;
 
 #ifndef VERSION
-#define VERSION "7.0.2"
+#define VERSION "7.0.3"
 #endif
+
+// The one line this release is about, shown by `--version`. A number on its own
+// doesn't say what you installed. Its own guard, not inside the one above: the
+// test suite builds stub binaries with -DVERSION, and a TAGLINE that only exists
+// when VERSION does not would leave those stubs uncompilable.
+#ifndef TAGLINE
+#define TAGLINE "sd --version finally says which release this is"
+#endif
+
 #define CONFIG_VERSION 2
 
 namespace {
@@ -2599,7 +2608,7 @@ int run_move(const std::vector<std::string>& argv) {
   // fast path: `sd <word>` and `sd --version` are what run on every prompt
   if (argv.size() == 1) {
     if (argv[0] == "--version") {
-      std::cout << MOVE << " " << VERSION << " - the next zoxide\n";
+      std::cout << MOVE << " " << VERSION << " - " << TAGLINE << "\n";
       return 0;
     }
     if (argv[0] == "--help") {
@@ -2670,7 +2679,7 @@ int run_config(const std::vector<std::string>& argv) {
       "edit", "init", "completions", "update", "revert", "releases", "uninstall", "doctor"};
 
   if (verb == "--version") {
-    std::cout << CONFIG << " " << VERSION << " - the next zoxide\n";
+    std::cout << CONFIG << " " << VERSION << " - " << TAGLINE << "\n";
     return 0;
   }
   if (verb == "--help") {

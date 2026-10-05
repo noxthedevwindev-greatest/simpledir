@@ -8,7 +8,7 @@ ASSETS ?= $(ASSET) sd.cpp install.sh
 
 CXXFLAGS ?= -std=c++17 -O2 -static-libstdc++ -static-libgcc
 
-.PHONY: all binaries install uninstall test assets release audit-tags clean
+.PHONY: all binaries install uninstall test assets release audit-tags check clean
 
 all: binaries
 
@@ -94,6 +94,14 @@ audit-tags:
 	done; \
 	if [ $$fail -ne 0 ]; then echo "a tag points at the wrong commit. fix the tag, not the version."; exit 1; fi; \
 	echo "every tag matches its commit"
+
+# `--version` shows the release's own line, so it has to exist and say something.
+# A version number on its own tells you nothing about what you installed.
+check: test audit-tags
+	@hook=$$(sed -n 's/^#define TAGLINE "\(.*\)"/\1/p' sd.cpp | head -1); \
+	if [ -z "$$hook" ]; then echo "TAGLINE is empty. sd --version would just say a number."; exit 1; fi; \
+	case "$$hook" in the\ next\ zoxide) echo "TAGLINE is still the old generic one"; exit 1;; esac; \
+	printf '  %-9s %s\n' "$$(sed -n 's/^#define VERSION "\(.*\)"/v\1/p' sd.cpp | head -1)" "$$hook"
 
 clean:
 	rm -f sd sdcfg

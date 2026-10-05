@@ -888,6 +888,26 @@ check "generated bash comp is valid bash" 0 bash -n <("$CFG" completions bash)
 check "install.sh parses"        0 bash -n "$ROOT/install.sh"
 # The installer has to survive `curl … | bash`, which is the documented install
 # path and the reason two of these tests exist.
+# install.sh fetches sd.cpp from a pinned tag now, so it carries its own version.
+# If the two drift, a build-from-source install produces a different program than
+# the installer claims — and raw.githubusercontent will not tell you, because it
+# caches by path and happily serves last week's file.
+sd_version=$(sed -n 's/^#define VERSION "\(.*\)"/\1/p' "$ROOT/sd.cpp" | head -1)
+sh_version=$(sed -n 's/^SD_VERSION="\(.*\)"/\1/p' "$ROOT/install.sh" | head -1)
+check "install.sh and sd.cpp agree on the version" 0 test "$sd_version" = "$sh_version"
+check "install.sh pins its source url to the tag" 0 grep -q 'REPO/v\$SD_VERSION' "$ROOT/install.sh"
+
+# `--version` has to say which release this is, not just a number.
+hook=$(sed -n 's/^#define TAGLINE "\(.*\)"/\1/p' "$ROOT/sd.cpp" | head -1)
+check "the build declares a tagline"  0 test -n "$hook"
+lacks "the tagline isn't the old generic one" "the next zoxide" <<<"$hook"
+check "sd --version shows the tagline"  0 bash -c "'$SD' --version | grep -qF '$hook'"
+check "sdcfg --version shows it too"    0 bash -c "'$CFG' --version | grep -qF '$hook'"
+check "--version still leads with the name and number" 0 bash -c \
+  "'$SD' --version | grep -qE '^sd [0-9]+\.[0-9]+\.[0-9]+ - .'"
+check "no release line still says the generic tagline" 0 bash -c \
+  "! '$SD' --version | grep -q 'the next zoxide'"
+
 contains "install.sh documents the pipe case" "curl -fsSL" bash "$ROOT/install.sh" --help
 check   "install.sh rejects junk"  1 bash "$ROOT/install.sh" --nope
 
@@ -904,22 +924,36 @@ down() { env HOME="$DOWN" SHELL=/bin/bash PATH="/usr/bin:/bin" \
            SIMPLEDIR_BASE_URL="file://$DOWN/pub" SIMPLEDIR_SOURCE_URL="file://$ROOT" \
            SIMPLEDIR_NO_UPDATE_CHECK=1 bash "$DOWN/i.sh" "$@" </dev/null; }
 
-build_asset 7.0.0
+build_asset "$sh_version"
 down >/dev/null 2>&1
-contains "a stale asset is installed first"  "7.0.0" "$DOWN/.local/bin/sd" --version
+contains "a current asset installs"         "$sh_version" "$DOWN/.local/bin/sd" --version
 build_asset 6.0.0
 out=$(down 2>&1)
 has "a stale download is refused"            "stale mirror or cache" "$out"
-has "the refusal names both versions"        "v6.0.0"               "$out"
+has "the refusal names the old version"      "v6.0.0"               "$out"
 has "the refusal says how to override"       "SIMPLEDIR_ALLOW_DOWNGRADE" "$out"
 has "the refusal offers the source instead"  "--source"             "$out"
 check "a stale download changed nothing"     0 bash -c \
-  "'$DOWN/.local/bin/sd' --version | grep -q '^sd 7.0.0'"
+  "'$DOWN/.local/bin/sd' --version | grep -q '^sd $sh_version'"
 env HOME="$DOWN" SIMPLEDIR_ALLOW_DOWNGRADE=1 SHELL=/bin/bash PATH="/usr/bin:/bin" \
   SIMPLEDIR_BASE_URL="file://$DOWN/pub" SIMPLEDIR_NO_RC=1 \
   bash "$DOWN/i.sh" </dev/null >/dev/null 2>&1
 check "the override does downgrade"          0 bash -c \
   "'$DOWN/.local/bin/sd' --version | grep -q '^sd 6.0.0'"
+# the other floor: an asset older than the installer, with nothing installed at
+# all. raw.githubusercontent caches by path, so it will serve an install.sh from
+# before a fix and then hand that installer a source file from before it too.
+FLOOR=$(mktemp -d); mkdir -p "$FLOOR/pub/releases/latest/download"
+cp install.sh "$FLOOR/i.sh"
+g++ -std=c++17 -O1 -o "$FLOOR/pub/releases/latest/download/$asset" "$ROOT/sd.cpp" \
+    -DVERSION='"6.0.0"' 2>/dev/null
+out=$(env HOME="$FLOOR" SHELL=/bin/bash PATH="/usr/bin:/bin" \
+       SIMPLEDIR_BASE_URL="file://$FLOOR/pub" SIMPLEDIR_SOURCE_URL="file://$ROOT" \
+       SIMPLEDIR_NO_UPDATE_CHECK=1 bash "$FLOOR/i.sh" </dev/null 2>&1)
+has "an asset older than the installer is refused" "this installer is v$sh_version" "$out"
+has "and it says why"                              "caches by path"              "$out"
+check "nothing was installed"                    0 bash -c "! test -e '$FLOOR/.local/bin/sd'"
+rm -rf "$FLOOR"
 rm -rf "$DOWN"
 
 # the existing-install question has to be reachable at all, which it wasn't when

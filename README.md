@@ -90,13 +90,13 @@ you have no compiler. either way you get `sd` plus an `sdcfg` symlink in
 `~/.local/bin` and a wired-up shell rc.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v7.0.3/install.sh | bash
 ```
 
 prefer to look before you pipe? that's the right instinct:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/main/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v7.0.3/install.sh -o install.sh
 less install.sh && bash install.sh
 ```
 
@@ -273,6 +273,39 @@ want there anyway.
 
 tested on bash 5.2. the wrapper only uses portable constructs, so zsh should be
 fine, but that's untested — tell me if it breaks.
+
+## what's new in 7.0.3
+
+**raw.githubusercontent caches, and the whole install story is a curl from it.**
+
+7.0.2's fix was in git, in the GitHub API, and in the v7.0.3 tag — but
+`raw.githubusercontent.com/…/main/install.sh` kept serving the *old* file, so
+`curl … | bash` handed you the broken prompt. that's not a GitHub bug, it's a CDN
+cache keyed on the path, and there is no way to bust it from inside a URL you're
+copying.
+
+so the installer is pinned to its own tag now:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v7.0.3/install.sh | bash
+```
+
+a tagged path never changes, so the cache is always correct for the version it
+names. the installer knows which version it is (`SD_VERSION`) and fetches `sd.cpp`
+from that same tag, so a build-from-source produces the program it claims to. a
+test asserts `install.sh` and `sd.cpp` agree, because if they drift you get one
+program from a script promising another.
+
+it also refuses an asset older than itself now, not just older than what's
+installed — that combination is a cached installer meeting a cached download:
+
+```
+!! the download is v6.0.0 but this installer is v7.0.3.
+!! raw.githubusercontent caches by path, so it served an older release.
+```
+
+a *newer* asset is still fine and still installed: the installer installs whatever
+latest is.
 
 ## what's new in 7.0.2
 
@@ -572,7 +605,7 @@ forward. `update --to` says so before it does it, and the way back is the
 installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v7.0.3/install.sh | bash
 ```
 
 it also checks on its own, at most **once a day**, and only when you're sitting
@@ -607,7 +640,7 @@ else with `SIMPLEDIR_BIN=/path/to/sd`.
 
 ```bash
 make                # build: one g++ invocation over one file
-make test           # 392 assertions, real bash subprocesses, no network
+make test           # 397 assertions, real bash subprocesses, no network
 make assets         # dist/ for a release: the binary, sd.cpp, install.sh
 make release        # tag, push, publish with assets attached
 vhs docs/demo.tape  # re-record the gif above (needs vhs + ttyd)

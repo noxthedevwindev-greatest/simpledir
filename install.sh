@@ -3,7 +3,7 @@
 # simpledir installer. finds a prebuilt binary for this box, or compiles one,
 # then installs sd + sdcfg and wires your shell rc.
 #
-#   curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v7.0.3/install.sh | bash
 #
 # options:
 #   --source        compile from source even if a binary exists
@@ -25,7 +25,15 @@ OWNER="noxthedevwindev-greatest"
 REPO="simpledir"
 BASE="${SIMPLEDIR_BASE_URL:-https://github.com/$OWNER/$REPO}"
 # a base directory for raw files, not a full path to one
-RAW="${SIMPLEDIR_SOURCE_URL:-https://raw.githubusercontent.com/$OWNER/$REPO/main}"
+# The version this installer belongs to. Fetch from the *tag*, not from main:
+# raw.githubusercontent caches by path, and it will happily serve you an
+# install.sh from before the fix you are reading about — which is exactly what
+# happened to v7.0.2, and why the question printed nothing. A tagged path never
+# changes, so the cache is always right for the version it names.
+#
+# Keep this in step with VERSION in sd.cpp; a test checks that it is.
+SD_VERSION="7.0.3"
+RAW="${SIMPLEDIR_SOURCE_URL:-https://raw.githubusercontent.com/$OWNER/$REPO/v$SD_VERSION}"
 case "$RAW" in */) ;; *) RAW="$RAW/" ;; esac
 BIN_DIR="${SIMPLEDIR_BIN_DIR:-$HOME/.local/bin}"
 SD="$BIN_DIR/sd"
@@ -182,9 +190,22 @@ obtain() {
         # stale one hands you the previous release, and an installer that only
         # checks "is this our tool?" will happily downgrade you. It did, silently,
         # to 6.5.0 while 7.0.0 was published.
+        # Two floors, not one. `got` must not be older than this installer, or
+        # the cache is serving a release from before the installer you are running;
+        # and it must not be older than what is already installed, or the cached
+        # `latest` redirect is undoing an upgrade. A *newer* asset is fine and
+        # expected — this installer installs whatever latest is.
+        stale_for_this=0
+        if [ -n "$got" ] && older_than "$got" "$SD_VERSION"; then stale_for_this=1; fi
         if [ -n "$have" ] && [ -n "$got" ] && older_than "$got" "$have"; then
           warn "the download is v$got but v$have is already installed."
           warn "that's a stale mirror or cache of releases/latest/download, not a real downgrade."
+        fi
+        if [ "$stale_for_this" = "1" ]; then
+          warn "the download is v$got but this installer is v$SD_VERSION."
+          warn "raw.githubusercontent caches by path, so it served an older release."
+        fi
+        if [ "$stale_for_this" = "1" ] || { [ -n "$have" ] && [ -n "$got" ] && older_than "$got" "$have"; }; then
           if [ "$ALLOW_DOWNGRADE" = "1" ]; then
             warn "installing it anyway, because SIMPLEDIR_ALLOW_DOWNGRADE=1."
           else
@@ -193,6 +214,8 @@ obtain() {
             rm -rf "$work"
             exit 1
           fi
+        elif [ -n "$got" ] && [ "$got" != "$SD_VERSION" ]; then
+          info "(that is newer than this installer, v$SD_VERSION. fine.)"
         fi
         info "got $("$work/sd" --version)"
         cp "$work/sd" "$dest"
