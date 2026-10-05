@@ -442,6 +442,129 @@ EOF
 fr2 "$SD" print q >/dev/null
 check '"history": false stops the log'   0 bash -c "! test -e '$FR2/history.json'"
 
+# --- sd adapt / sdcfg adapt ---------------------------------------------------
+# The frecency log already knows every directory you go to, including the ones you
+# never named. These are the ones worth a name. What makes this adaptive rather
+# than `sd suggest` again is the verdict: say no and it goes quiet, say no again
+# and it goes quieter, say yes and it's bound and never asked about again. Two
+# counters and a bit of arithmetic; nothing here guesses.
+#
+# One directory per scenario, because a verdict is permanent: accept one and it is
+# never a proposal again, so sharing a fixture between the accept and reject tests
+# makes the second one fail for the wrong reason.
+AD=$(mktemp -d); mkdir -p "$AD/cfg"
+ad() { env SIMPLEDIR_CONFIG_DIR="$AD/cfg" "$@"; }
+ad_visit() { # ad_visit <dir>: jump to a directory without leaving it named
+  ad "$CFG" add __visit "$AD/$1" >/dev/null
+  ad "$SD" print __visit >/dev/null
+  ad "$CFG" rm __visit >/dev/null
+}
+for d in w1 n1 r1 c1; do mkdir -p "$AD/$d"; ad_visit "$d"; done
+
+# what it wants to learn
+contains "adapt lists unnamed directories"    "w1" ad "$SD" adapt
+contains "adapt names each from its own path" "r1" ad "$SD" adapt
+contains "adapt --json is an array"           '"name"' ad "$SD" adapt --json
+check   "adapt --json has no aliases key"     1 bash -c \
+  "env SIMPLEDIR_CONFIG_DIR='$AD/cfg' '$SD' adapt --json | grep -q '\"aliases\"'"
+contains "adapt explains how to answer"       "--accept" ad "$SD" adapt
+contains "adapt says how to forget it"       "--clear"  ad "$SD" adapt
+
+# a directory that has a name is not a proposal: `sd <name>` is already the way in
+ad "$CFG" add c1 "$AD/c1" >/dev/null
+lacks   "a named directory is not proposed" "c1" ad "$SD" adapt
+ad "$CFG" rm c1 >/dev/null
+contains "unbinding brings it back"          "c1" ad "$SD" adapt
+
+# accept: binds it, remembers it, stops asking
+contains "accept reports what it bound"  "bound w1" "$(ad "$CFG" adapt --accept w1)"
+lacks   "an accepted dir leaves the list" "w1" "$(ad "$SD" adapt)"
+check   "accept created the alias"  0 bash -c "env SIMPLEDIR_CONFIG_DIR='$AD/cfg' '$SD' print w1"
+check   "accept recorded the verdict" 0 grep -q '"yes"' "$AD/cfg/adapt.json"
+
+# --no-bind: remember the answer without acting on it
+contains "accept --no-bind says so" "not bound" "$(ad "$CFG" adapt --accept n1 --no-bind)"
+check   "--no-bind created no alias" 0 bash -c "! grep -q '\"n1\"' '$AD/cfg/config.json'"
+
+# reject: quiet for a week, and out of the list
+contains "reject says how long"           "quiet for 7 days" "$(ad "$CFG" adapt --reject r1)"
+lacks   "a refused dir leaves the list"   "r1" "$(ad "$SD" adapt)"
+contains "--all brings it back"           "r1" "$(ad "$SD" adapt --all)"
+contains "and says how long it is quiet"  "refused, quiet for" "$(ad "$SD" adapt --all)"
+
+# the backoff doubles per refusal: 7 days, then 14, 28, ... capped at a year.
+# Set the strike count directly rather than calling --reject repeatedly: this is a
+# test of the formula, and counting my own calls made it depend on the order the
+# assertions ran in.
+set_verdict() { # set_verdict <verdict> <strikes> <days-ago>
+  python3 - "$AD/cfg/adapt.json" "$1" "$2" "$3" <<'PYEOF'
+import json, os, sys, pathlib, time
+path, verdict, strikes, days = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+target = os.environ["SD_ADAPT_TARGET"]
+p = pathlib.Path(path)
+d = json.loads(p.read_text()) if p.exists() else {"version": 1, "verdicts": {}}
+d["verdicts"][target] = {"v": verdict, "t": time.time() - 86400 * days, "s": strikes}
+p.write_text(json.dumps(d))
+PYEOF
+}
+export SD_ADAPT_TARGET="$AD/r1"
+contains "one refusal is quiet for 7 days"     "quiet for 7 days" \
+  "$(set_verdict no 0 0;  ad "$CFG" adapt --reject r1)"
+contains "two refusals double it to 14"        "quiet for 14 days" \
+  "$(set_verdict no 1 0;  ad "$CFG" adapt --reject r1)"
+contains "three refusals make it 28"           "quiet for 28 days" \
+  "$(set_verdict no 2 0;  ad "$CFG" adapt --reject r1)"
+contains "it says which refusal it was"        "refusal 3" \
+  "$(set_verdict no 2 0;  ad "$CFG" adapt --reject r1)"
+contains "four refusals make it 56"            "quiet for 56 days" \
+  "$(set_verdict no 3 0;  ad "$CFG" adapt --reject r1)"
+# 7 * 2^n passes a year at n=6, and the cap is the point
+contains "the backoff stops at a year"         "quiet for 365 days" \
+  "$(set_verdict no 20 0; ad "$CFG" adapt --reject r1)"
+# once the quiet period has elapsed, it asks again and says so
+contains "an expired refusal asks again"       "asking once more" \
+  "$(set_verdict no 0 8; ad "$SD" adapt --all)"
+contains "a live refusal stays quiet"          "refused, quiet for" \
+  "$(set_verdict no 0 0; ad "$SD" adapt --all)"
+# accepting after refusing clears the strikes, because the answer changed
+set_verdict no 3 0
+ad "$CFG" adapt --reject r1 >/dev/null
+check "refusing again increments the count" 0 grep -q '"s": 4' "$AD/cfg/adapt.json"
+contains "accepting after refusing"      "bound r1" "$(ad "$CFG" adapt --accept r1)"
+check "accepting clears the strikes"    0 grep -q '"s": 0' "$AD/cfg/adapt.json"
+
+# --clear forgets every verdict and starts over
+contains "adapt --clear says so"        "forgot every verdict" "$(ad "$CFG" adapt --clear)"
+check   "adapt --clear removed the file" 0 bash -c "! test -e '$AD/cfg/adapt.json'"
+# a name is a name, not a verdict: bind it and it stops being a proposal again,
+# and --clear leaves it bound while the refusals come back
+ad "$CFG" add r1 "$AD/r1" >/dev/null
+lacks   "a bound dir stays out of it"      "r1" "$(ad "$SD" adapt)"
+ad "$CFG" rm r1 >/dev/null
+ad_visit r1
+contains "an unbound dir is proposed again" "r1" "$(ad "$SD" adapt)"
+# self-contained: seed a verdict so the assertion doesn't depend on what the
+# backoff tests above happened to leave behind
+export SD_ADAPT_TARGET="$AD/r1"
+set_verdict no 0 0
+contains "clear says names are kept"        "unbind" "$(ad "$CFG" adapt --clear)"
+unset SD_ADAPT_TARGET
+contains "clearing twice is fine"       "no verdicts" "$(ad "$CFG" adapt --clear)"
+
+# usage
+check "adapt needs yes or no"         2 ad "$CFG" adapt
+check "adapt needs a name"            2 ad "$CFG" adapt --accept
+check "adapt rejects a non-proposal"  1 ad "$CFG" adapt --accept nosuchthing
+contains "and points at sd adapt"     "sd adapt" "$(ad "$CFG" adapt --accept nosuchthing 2>&1)"
+check "adapt --top limits"  0 bash -c \
+  "[[ \$(env SIMPLEDIR_CONFIG_DIR='$AD/cfg' '$SD' adapt --top 1 | grep -cE '^ +[0-9]') -eq 1 ]]"
+check "adapt rejects an unknown flag" 2 ad "$SD" adapt --nope
+
+# a corrupt verdict file is ours, so it must never stop a command
+printf 'not json' > "$AD/cfg/adapt.json"
+check "a corrupt adapt.json is survivable" 0 ad "$SD" adapt
+rm -rf "$AD"
+
 # --- sdcfg forget -------------------------------------------------------------
 contains "forget on an empty log is fine" "already empty" \
   "$(env SIMPLEDIR_CONFIG_DIR=$(mktemp -d) "$CFG" forget)"

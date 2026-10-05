@@ -90,13 +90,13 @@ you have no compiler. either way you get `sd` plus an `sdcfg` symlink in
 `~/.local/bin` and a wired-up shell rc.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v7.0.3/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v8.0.0/install.sh | bash
 ```
 
 prefer to look before you pipe? that's the right instinct:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v7.0.3/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v8.0.0/install.sh -o install.sh
 less install.sh && bash install.sh
 ```
 
@@ -274,6 +274,49 @@ want there anyway.
 tested on bash 5.2. the wrapper only uses portable constructs, so zsh should be
 fine, but that's untested — tell me if it breaks.
 
+## what's new in 8.0
+
+**it asks which of your directories deserve names, and remembers your answer.**
+
+`sd adapt` looks at the frecency log and lists the directories you keep visiting
+that have no name. the ones you visit every day and tab-complete every time:
+
+```
+$ sd adapt
+4 directories you keep visiting that have no name, most recent first:
+
+    8.42  wezterm     /home/you/src/wezterm-config
+    4.10  dotfiles    /home/you/dotfiles
+    2.03  logs        /home/you/var/logs
+```
+
+then you answer, and the answer is what makes it adaptive rather than a second
+`suggest`:
+
+```bash
+sdcfg adapt --accept dotfiles    # binds it, and never asks again
+sdcfg adapt --reject logs       # stops asking, and doubles how long it stays quiet
+```
+
+**saying no gets quieter each time.** seven days, then fourteen, then twenty-eight,
+capped at a year. a directory you keep refusing stops taking up a slot in the list,
+and one you come back to after a month gets one more chance with the reason shown:
+
+```
+  sd adapt --all
+    1.00  r1   /home/you/r1   [refused, quiet for 7d]
+    1.00  r2   /home/you/r2   [you said no 3x, asking once more]
+```
+
+accept with `--no-bind` to record the verdict without creating an alias. `--clear`
+forgets every verdict, and says plainly that names you already bound are names, not
+verdicts.
+
+**none of this is a model.** it's two integers per directory and a comparison. no
+inference, no API key, nothing off the machine. the verdicts live in
+`~/.simpledir/adapt.json`, which is ours and survives being corrupt without taking a
+`cd` with it.
+
 ## what's new in 7.0.3
 
 **raw.githubusercontent caches, and the whole install story is a curl from it.**
@@ -287,7 +330,7 @@ copying.
 so the installer is pinned to its own tag now:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v7.0.3/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v8.0.0/install.sh | bash
 ```
 
 a tagged path never changes, so the cache is always correct for the version it
@@ -605,7 +648,7 @@ forward. `update --to` says so before it does it, and the way back is the
 installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v7.0.3/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v8.0.0/install.sh | bash
 ```
 
 it also checks on its own, at most **once a day**, and only when you're sitting

@@ -46,7 +46,7 @@
 namespace fs = std::filesystem;
 
 #ifndef VERSION
-#define VERSION "7.0.3"
+#define VERSION "8.0.0"
 #endif
 
 // The one line this release is about, shown by `--version`. A number on its own
@@ -54,7 +54,7 @@ namespace fs = std::filesystem;
 // test suite builds stub binaries with -DVERSION, and a TAGLINE that only exists
 // when VERSION does not would leave those stubs uncompilable.
 #ifndef TAGLINE
-#define TAGLINE "sd --version finally says which release this is"
+#define TAGLINE "it learns which of your directories deserve names"
 #endif
 
 #define CONFIG_VERSION 2
@@ -756,7 +756,6 @@ std::vector<Hit> frecency_ranked(const std::string& word, const Config& cfg, dou
   });
   return out;
 }
-
 // --------------------------------------------------------------- suggestions
 
 // ratio*100, difflib's SequenceMatcher on the cheap approximation of it. good
@@ -972,6 +971,308 @@ Args parse_args(const std::vector<std::string>& argv) {
 struct Release;
 std::vector<Release> releases(int limit = 10);
 void nudge();
+
+// defined with the import commands further down; the proposals need it too
+std::string name_for(const std::string& path, const std::set<std::string>& taken);
+
+// ------------------------------------------------------------------- adapting
+//
+// The frecency log already knows every directory you go to, including the ones you
+// never named. Those are the ones worth a name: a directory you visit forty times a
+// month and have to tab-complete every time.
+//
+// What makes this adaptive rather than a `sd suggest` for frecency is the verdicts.
+// Say no to a proposal and it goes quiet, and saying no again pushes it quieter —
+// the backoff doubles per rejection. Say yes and it's bound and never proposed
+// again. All of it is arithmetic over two counters; nothing here guesses anything.
+
+constexpr double ADAPT_BASE_DAYS = 7;      // quiet after the first "no"
+constexpr double ADAPT_MAX_DAYS = 365;     // ...but never for more than a year
+constexpr size_t ADAPT_MAX_VERDICTS = 500;
+
+struct Verdict {
+  std::string verdict;  // "yes" or "no"
+  double at = 0;
+  int strikes = 0;
+};
+
+std::string adapt_file() { return g_config_dir + "/adapt.json"; }
+
+std::map<std::string, Verdict> read_verdicts() {
+  std::map<std::string, Verdict> out;
+  std::string path = adapt_file();
+  if (!path_exists(path)) return out;
+  JsonPtr root;
+  try {
+    root = json_parse(read_file(path));
+  } catch (const UserError&) {
+    return out;  // our own file; a bad one must not stop a `cd`
+  }
+  if (!root || !root->is_obj()) return out;
+  JsonPtr verdicts = root->get("verdicts");
+  if (!verdicts || !verdicts->is_obj()) return out;
+  for (const auto& [path_key, node] : verdicts->obj) {
+    if (!node || !node->is_obj()) continue;
+    Verdict v;
+    if (JsonPtr s = node->get("v")) v.verdict = s->as_str();
+    if (JsonPtr t = node->get("t")) v.at = t->as_num();
+    if (JsonPtr n = node->get("s")) v.strikes = static_cast<int>(n->as_num());
+    if (!v.verdict.empty()) out[path_key] = v;
+  }
+  return out;
+}
+
+void write_verdicts(const std::map<std::string, Verdict>& verdicts) {
+  // keep the file from growing forever: drop the oldest first, and anything that
+  // faded years ago along with it
+  double now = now_seconds();
+  std::vector<std::pair<double, std::string>> by_age;
+  for (const auto& [path, v] : verdicts)
+    if (now - v.at > 2 * ADAPT_MAX_DAYS * 24 * 3600) continue;
+    else by_age.emplace_back(v.at, path);
+  if (by_age.size() > ADAPT_MAX_VERDICTS) {
+    std::sort(by_age.begin(), by_age.end());
+    by_age.erase(by_age.begin(), by_age.begin() + (by_age.size() - ADAPT_MAX_VERDICTS));
+  }
+
+  auto root = Json::make_obj();
+  root->set("version", Json::make_num(1));
+  auto node = Json::make_obj();
+  std::set<std::string> keep;
+  for (const auto& [age, path] : by_age) keep.insert(path);
+  for (const auto& [path, v] : verdicts) {
+    if (!keep.count(path)) continue;
+    auto entry = Json::make_obj();
+    entry->set("v", Json::make_str(v.verdict));
+    entry->set("t", Json::make_num(v.at));
+    entry->set("s", Json::make_num(v.strikes));
+    node->set(path, entry);
+  }
+  root->set("verdicts", node);
+  try {
+    write_atomic(adapt_file(), json_dump(root) + "\n");
+  } catch (const std::exception&) {
+    // a read-only home shouldn't break a command
+  }
+}
+
+// How long a "no" lasts. Doubles per rejection, so a directory you keep refusing
+// stops taking up a slot in the list, and a year is the end of it — people move on
+// and come back.
+double quiet_for(const Verdict& v) {
+  int strikes = v.strikes < 1 ? 1 : v.strikes;
+  double days = ADAPT_BASE_DAYS * std::pow(2.0, strikes - 1);
+  return std::min(days, ADAPT_MAX_DAYS) * 24 * 3600;
+}
+
+struct Proposal {
+  std::string path;
+  std::string name;
+  double score = 0;
+  bool refused = false;  // you said no at some point
+  bool retry = false;    // ...and the backoff has since run out, so it's asking again
+  int strikes = 0;
+  double quiet_left = 0;  // seconds until it asks again, when refused and not retrying
+};
+
+std::vector<Proposal> adapt_proposals(int limit, bool include_rejected) {
+  Config cfg = load_config();
+  double now = now_seconds();
+  auto verdicts = read_verdicts();
+
+  std::set<std::string> bound;
+  std::set<std::string> taken;
+  for (const auto& [name, path] : cfg.aliases) {
+    bound.insert(as_stored(path));
+    taken.insert(name);
+  }
+
+  std::vector<Proposal> out;
+  for (const auto& [path, entry] : read_history()) {
+    if (bound.count(path)) continue;       // it has a name; `sd <name>` is the way in
+    if (!is_dir(path)) continue;           // it isn't there any more
+    double score = decayed(entry, now);
+    if (score < FLOOR) continue;           // you haven't been in ages
+
+    auto it = verdicts.find(path);
+    bool refused = false, retry = false;
+    int strikes = 0;
+    double quiet_left = 0;
+    if (it != verdicts.end()) {
+      const Verdict& v = it->second;
+      strikes = v.strikes;
+      if (v.verdict == "yes") continue;    // handled; it has a name or you said it was fine
+      if (v.verdict == "no") {
+        refused = true;
+        quiet_left = (v.at + quiet_for(v)) - now;
+        if (quiet_left > 0) {
+          if (!include_rejected) continue;
+        } else {
+          retry = true;                    // the backoff ran out; worth asking once more
+          quiet_left = 0;
+        }
+      }
+    }
+    out.push_back({path, name_for(path, taken), score, refused, retry, strikes, quiet_left});
+  }
+  std::sort(out.begin(), out.end(), [](const Proposal& a, const Proposal& b) {
+    if (a.score != b.score) return a.score > b.score;
+    return a.path < b.path;
+  });
+  if (limit > 0 && static_cast<size_t>(limit) < out.size()) out.resize(limit);
+  return out;
+}
+
+// `sd adapt` — read-only. what it wants to learn, and nothing else.
+int cmd_adapt(const Args& args) {
+  int limit = 10;
+  if (args.saw("top")) limit = std::atoi(args.value("top", "10").c_str());
+  auto found = adapt_proposals(limit, args.has("all"));
+
+  if (found.empty()) {
+    auto verdicts = read_verdicts();
+    size_t refused = 0;
+    for (const auto& [path, v] : verdicts)
+      if (v.verdict == "no") refused++;
+    std::cout << "nothing left to learn. every directory you keep visiting has a name"
+              << " already.\n";
+    if (refused) std::cout << "  " << refused << " refused, waiting out their quiet period\n";
+    std::cout << "  " << MOVE << " top shows the whole log, including named ones\n";
+    return 0;
+  }
+
+  if (args.has("json")) {
+    auto list = Json::make_arr();
+    for (const Proposal& p : found) {
+      auto node = Json::make_obj();
+      node->set("path", Json::make_str(p.path));
+      node->set("name", Json::make_str(p.name));
+      char buf[32];
+      std::snprintf(buf, sizeof buf, "%.3f", p.score);
+      node->set("score", Json::make_num(std::stod(buf)));
+      node->set("retry", Json::make_bool(p.retry));
+      node->set("refusals", Json::make_num(p.strikes));
+      list->arr.push_back(node);
+    }
+    std::cout << json_dump(list) << "\n";
+    return 0;
+  }
+
+  size_t width = 0;
+  for (const Proposal& p : found) width = std::max(width, p.path.size());
+  std::cout << found.size() << " director"
+            << (found.size() == 1 ? "y" : "ies")
+            << " you keep visiting that " << (found.size() == 1 ? "has" : "have")
+            << " no name, most recent first:\n\n";
+  for (const Proposal& p : found) {
+    char score[32];
+    std::snprintf(score, sizeof score, "%6.2f", p.score);
+    std::cout << "  " << score << "  " << p.name << std::string(12 - std::min<size_t>(12, p.name.size()), ' ')
+              << "  " << p.path;
+    if (p.retry) {
+      std::cout << "   [you said no " << p.strikes << "x, asking once more]";
+    } else if (p.refused) {
+      long hours = static_cast<long>(p.quiet_left / 3600);
+      std::cout << "   [refused, quiet for "
+                << (hours < 48 ? std::to_string(hours) + "h"
+                               : std::to_string(hours / 24) + "d")
+                << "]";
+    }
+    std::cout << "\n";
+  }
+  std::cout << "\nkeep one:\n"
+            << "  " << CONFIG << " adapt --accept <name>          bind it as well as remember it\n"
+            << "  " << CONFIG << " adapt --reject <name>          stop asking\n"
+            << "  " << CONFIG << " adapt --accept <name> --no-bind just remember the verdict\n"
+            << "\nforget every verdict:\n"
+            << "  " << CONFIG << " adapt --clear\n";
+  return 0;
+}
+
+// `sdcfg adapt` — writes. records what you said, and optionally acts on it.
+int cmd_adapt_apply(const Args& args) {
+  if (args.has("clear")) {
+    if (!path_exists(adapt_file())) {
+      std::cout << "no verdicts recorded yet\n";
+      return 0;
+    }
+    std::error_code ec;
+    fs::remove(adapt_file(), ec);
+    std::cout << "forgot every verdict. " << MOVE << " adapt will ask about anything you refused again.\n"
+              << "  names you already bound are names, not verdicts — " << CONFIG << " rm to unbind one\n";
+    return 0;
+  }
+
+  std::string verdict = args.has("accept") ? "yes" : args.has("reject") ? "no" : "";
+  if (verdict.empty())
+    throw UsageError("say yes or no: " + CONFIG + " adapt --accept <name>, or --reject <name>");
+
+  // The argument is the name as `sd adapt` printed it. Resolve it back to a path
+  // through the proposals rather than trusting the name to be unique on its own.
+  // --accept and --reject are switches, so the name is the first *word*, not the
+  // second argument
+  std::string wanted = args.word(0);
+  if (wanted.empty())
+    throw UsageError("which one? " + CONFIG + " adapt --accept <name>");
+
+  auto found = adapt_proposals(0, true);
+  std::string target;
+  for (const Proposal& p : found) {
+    if (p.name == wanted) { target = p.path; break; }
+    // also accept the full path, because that's what's on screen
+    if (p.path == wanted) { target = p.path; break; }
+  }
+  if (target.empty()) {
+    std::string msg = "'" + wanted + "' isn't one of the proposals";
+    if (!found.empty()) msg += ". run `" + MOVE + " adapt` to see them";
+    throw UserError(msg);
+  }
+
+  auto verdicts = read_verdicts();
+  Verdict& v = verdicts[target];
+  double now = now_seconds();
+  v.verdict = verdict;
+  v.at = now;
+  // Saying yes twice, or no once then yes, clears the strike count: the answer
+  // changed, so the old refusals no longer describe you.
+  v.strikes = verdict == "no" ? v.strikes + 1 : 0;
+  if (verdict == "yes") v.strikes = 0;
+  write_verdicts(verdicts);
+
+  Config cfg = load_config();
+  std::string bound_name;
+  if (verdict == "yes" && !args.has("no-bind")) {
+    std::set<std::string> taken;
+    for (const auto& [name, path] : cfg.aliases) {
+      (void)path;
+      taken.insert(name);
+    }
+    std::string name = name_for(target, taken);
+    if (cfg.aliases.count(name)) {
+      std::cout << "not binding: the name '" << name << "' is already taken by "
+                << cfg.aliases.at(name) << "\n";
+    } else {
+      cfg.aliases[name] = target;
+      save_config(cfg);
+      bound_name = name;
+    }
+  }
+
+  if (verdict == "no") {
+    double days = quiet_for(v) / (24 * 3600);
+    std::cout << "noted. " << target << "\n";
+    std::cout << "  quiet for " << (days < 1 ? std::to_string(days * 24) + " hours"
+                                            : std::to_string(static_cast<long>(days)) + " days");
+    if (v.strikes > 1) std::cout << ", doubled because that's refusal " << v.strikes;
+    std::cout << "\n  it'll ask again once that's up, then stop asking entirely after a year\n";
+  } else if (!bound_name.empty()) {
+    std::cout << "bound " << bound_name << " -> " << target << "\n";
+    std::cout << "  " << MOVE << " " << bound_name << " now\n";
+  } else {
+    std::cout << "noted, not bound: " << target << "\n";
+  }
+  return 0;
+}
 
 // ------------------------------------------------------------------ move half
 
@@ -2351,7 +2652,7 @@ int cmd_completions(const std::string& shell) {
               << "complete -o filenames -F _" << MOVE << "_complete " << MOVE << "\n"
               << "\n"
               << "_" << CONFIG << "_complete() {\n"
-              << "  local cur verbs=\"add rm rename import bind forget migrate zoxide prompt edit init "
+              << "  local cur verbs=\"add rm rename import bind forget adapt migrate zoxide prompt edit init "
                  "completions update revert releases uninstall doctor\"\n"
               << "  cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
               << "  COMPREPLY=( $(compgen -W \"$verbs\" -- \"$cur\") )\n"
@@ -2562,6 +2863,7 @@ const char* MOVE_HELP =
     "  sd suggest [<query>]         directories from your history worth naming\n"
     "  sd suggest --json            as JSON\n"
     "  sd i [<query>]               interactive picker (fzf if installed)\n"
+    "  sd adapt [--top N]           directories you keep visiting that have no name\n"
     "\n"
     "  sd --help                    this text\n"
     "  sd --version                 print the version and exit\n"
@@ -2615,7 +2917,7 @@ int run_move(const std::vector<std::string>& argv) {
       std::cout << MOVE_HELP;
       return 0;
     }
-    const std::set<std::string> verbs = {"ls", "print", "suggest", "i", "top"};
+    const std::set<std::string> verbs = {"ls", "print", "suggest", "i", "top", "adapt"};
     if (!starts_with(argv[0], "-") && !verbs.count(argv[0])) {
       Config cfg = load_config();
       std::cout << jump(argv[0], cfg, now_seconds()) << "\n";
@@ -2639,6 +2941,14 @@ int run_move(const std::vector<std::string>& argv) {
     return cmd_ls(args);
   }
   if (verb == "top") return cmd_top(parse_args(rest));
+  if (verb == "adapt") {
+    Args args = parse_args(rest);
+    for (const auto& flag : args.flags) {
+      if (!std::set<std::string>({"json", "top", "all"}).count(flag.first))
+        throw UsageError("unknown flag '--" + flag.first + "' for `sd adapt`. try --top, --all, --json");
+    }
+    return cmd_adapt(args);
+  }
   if (verb == "i") return cmd_pick(parse_args(rest));
   if (verb == "suggest") {
     Args args = parse_args(rest);
@@ -2656,7 +2966,7 @@ int run_move(const std::vector<std::string>& argv) {
     return 0;
   }
   static const std::set<std::string> config_verbs = {
-      "add", "rm", "rename", "import", "bind", "forget", "migrate", "zoxide", "prompt",
+      "add", "rm", "rename", "import", "bind", "adapt", "forget", "migrate", "zoxide", "prompt",
       "edit", "init", "completions", "update", "revert", "releases", "uninstall", "doctor"};
   if (config_verbs.count(verb)) {
     throw UsageError("'" + verb + "' is not an " + MOVE + " command.\n  did you mean `" + CONFIG +
@@ -2675,7 +2985,7 @@ int run_config(const std::vector<std::string>& argv) {
   Args args = parse_args(rest);
 
   static const std::set<std::string> known = {
-      "add", "rm", "rename", "import", "bind", "forget", "migrate", "zoxide", "prompt",
+      "add", "rm", "rename", "import", "bind", "adapt", "forget", "migrate", "zoxide", "prompt",
       "edit", "init", "completions", "update", "revert", "releases", "uninstall", "doctor"};
 
   if (verb == "--version") {
@@ -2688,7 +2998,7 @@ int run_config(const std::vector<std::string>& argv) {
   }
   if (!known.count(verb)) {
     // reaching for the wrong half is the commonest mistake; help if we can
-    static const std::set<std::string> move_verbs = {"ls", "print", "suggest", "i", "top"};
+    static const std::set<std::string> move_verbs = {"ls", "print", "suggest", "i", "top", "adapt"};
     if (move_verbs.count(verb)) {
       std::cerr << "did you mean `" << MOVE << " " << verb << "`? " << CONFIG
                 << " only changes things.\n";
@@ -2701,6 +3011,7 @@ int run_config(const std::vector<std::string>& argv) {
   if (verb == "rename") return cmd_rename(args);
   if (verb == "import") return cmd_import(args);
   if (verb == "bind") return cmd_bind(args);
+  if (verb == "adapt") return cmd_adapt_apply(args);
   if (verb == "forget") return cmd_forget(args);
   if (verb == "migrate") return cmd_migrate(args);
   if (verb == "zoxide") return cmd_zoxide(args);

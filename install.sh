@@ -3,7 +3,7 @@
 # simpledir installer. finds a prebuilt binary for this box, or compiles one,
 # then installs sd + sdcfg and wires your shell rc.
 #
-#   curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v7.0.3/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v8.0.0/install.sh | bash
 #
 # options:
 #   --source        compile from source even if a binary exists
@@ -32,7 +32,7 @@ BASE="${SIMPLEDIR_BASE_URL:-https://github.com/$OWNER/$REPO}"
 # changes, so the cache is always right for the version it names.
 #
 # Keep this in step with VERSION in sd.cpp; a test checks that it is.
-SD_VERSION="7.0.3"
+SD_VERSION="8.0.0"
 RAW="${SIMPLEDIR_SOURCE_URL:-https://raw.githubusercontent.com/$OWNER/$REPO/v$SD_VERSION}"
 case "$RAW" in */) ;; *) RAW="$RAW/" ;; esac
 BIN_DIR="${SIMPLEDIR_BIN_DIR:-$HOME/.local/bin}"
