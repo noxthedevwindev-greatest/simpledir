@@ -55,11 +55,17 @@ uninstall:
 	sed -i '/# >>> simpledir >>>/,/# <<< simpledir <<</d' $(RC)
 	@echo "removed binaries + rc block (config kept in ~/.simpledir)"
 
-# release assets: the binary for this platform, the source, and the installer
+# release assets: the binary for this platform under the name the installer
+# looks for, plus the source and the installer. dist/ is wiped first — a stale
+# file from an older build is exactly how you ship the wrong binary.
 assets: sd
+	@rm -rf dist
 	@mkdir -p dist
-	@for f in $(ASSETS); do install -m 755 "$$f" "dist/$$f"; done
+	install -m 755 sd "dist/$(ASSET)"
+	install -m 755 sd.cpp dist/sd.cpp
+	install -m 755 install.sh dist/install.sh
 	@ls -l dist
+	@./sd --version
 
 release: test assets
 	@version=$$(sed -n 's/^#define VERSION "\(.*\)"/\1/p' sd.cpp); \
