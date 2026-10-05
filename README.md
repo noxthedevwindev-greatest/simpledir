@@ -274,6 +274,35 @@ want there anyway.
 tested on bash 5.2. the wrapper only uses portable constructs, so zsh should be
 fine, but that's untested — tell me if it breaks.
 
+## what's new in 7.0.1
+
+the installer had two bugs that only `curl … | bash` could reach, which is to say
+the way everyone installs it.
+
+**the "what do you want to do about the existing install?" menu could never
+appear.** it checked `[ -t 0 ]`, and when the script arrives through a pipe stdin
+*is* the pipe — so the documented install path silently skipped the question and
+repaired without asking. it now reads `/dev/tty`, which is still your keyboard in
+that situation.
+
+**a stale download silently downgraded you.** `releases/latest/download/` is a
+redirect, and redirects get cached by whatever sits between you and GitHub. handed
+the previous release, the installer checked "is this our tool?", saw yes, and
+installed it over a newer one. it did that to 6.5.0 while 7.0.0 was published. it
+now compares versions and refuses:
+
+```
+!! the download is v6.0.0 but v7.0.0 is already installed.
+!! that's a stale mirror or cache of releases/latest/download, not a real downgrade.
+!! not installing it. to override: SIMPLEDIR_ALLOW_DOWNGRADE=1 bash install.sh
+!! or build from the source you already have: bash install.sh --source
+```
+
+also: the menu now prints *before* the question instead of asking you to pick from
+options you hadn't been shown, and `[ -r /dev/tty ]` is gone — the device node is
+readable by permission even with no controlling terminal, so the read then died
+with ENXIO and read as "asked, got nothing", which took the default.
+
 ## what's new in 7.0
 
 **your prompt can show how you got there.** one line in your rc and the alias you
@@ -558,7 +587,7 @@ else with `SIMPLEDIR_BIN=/path/to/sd`.
 
 ```bash
 make                # build: one g++ invocation over one file
-make test           # 372 assertions, real bash subprocesses, no network
+make test           # 391 assertions, real bash subprocesses, no network
 make assets         # dist/ for a release: the binary, sd.cpp, install.sh
 make release        # tag, push, publish with assets attached
 vhs docs/demo.tape  # re-record the gif above (needs vhs + ttyd)

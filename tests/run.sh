@@ -886,8 +886,86 @@ check "generated bash comp is valid bash" 0 bash -n <("$CFG" completions bash)
 # offline: the release fetcher is pointed at a local stand-in for a published
 # binary, and the source fetcher at the repo, so neither path touches the network
 check "install.sh parses"        0 bash -n "$ROOT/install.sh"
-contains "install.sh --help"     "curl -fsSL" bash "$ROOT/install.sh" --help
-check "install.sh rejects junk"  1 bash "$ROOT/install.sh" --nope
+# The installer has to survive `curl … | bash`, which is the documented install
+# path and the reason two of these tests exist.
+contains "install.sh documents the pipe case" "curl -fsSL" bash "$ROOT/install.sh" --help
+check   "install.sh rejects junk"  1 bash "$ROOT/install.sh" --nope
+
+# `releases/latest/download/` is a redirect, and redirects get cached. A stale one
+# serves the previous release, and an installer that only asks "is this our tool?"
+# will happily downgrade you. It did, silently, to 6.5.0 while 7.0.0 was published.
+DOWN=$(mktemp -d); mkdir -p "$DOWN/pub/releases/latest/download"
+cp install.sh "$DOWN/i.sh"
+build_asset() { # build_asset <version>
+  g++ -std=c++17 -O1 -o "$DOWN/pub/releases/latest/download/$asset" "$ROOT/sd.cpp" \
+      -DVERSION="\"$1\"" 2>/dev/null
+}
+down() { env HOME="$DOWN" SHELL=/bin/bash PATH="/usr/bin:/bin" \
+           SIMPLEDIR_BASE_URL="file://$DOWN/pub" SIMPLEDIR_SOURCE_URL="file://$ROOT" \
+           SIMPLEDIR_NO_UPDATE_CHECK=1 bash "$DOWN/i.sh" "$@" </dev/null; }
+
+build_asset 7.0.0
+down >/dev/null 2>&1
+contains "a stale asset is installed first"  "7.0.0" "$DOWN/.local/bin/sd" --version
+build_asset 6.0.0
+out=$(down 2>&1)
+has "a stale download is refused"            "stale mirror or cache" "$out"
+has "the refusal names both versions"        "v6.0.0"               "$out"
+has "the refusal says how to override"       "SIMPLEDIR_ALLOW_DOWNGRADE" "$out"
+has "the refusal offers the source instead"  "--source"             "$out"
+check "a stale download changed nothing"     0 bash -c \
+  "'$DOWN/.local/bin/sd' --version | grep -q '^sd 7.0.0'"
+env HOME="$DOWN" SIMPLEDIR_ALLOW_DOWNGRADE=1 SHELL=/bin/bash PATH="/usr/bin:/bin" \
+  SIMPLEDIR_BASE_URL="file://$DOWN/pub" SIMPLEDIR_NO_RC=1 \
+  bash "$DOWN/i.sh" </dev/null >/dev/null 2>&1
+check "the override does downgrade"          0 bash -c \
+  "'$DOWN/.local/bin/sd' --version | grep -q '^sd 6.0.0'"
+rm -rf "$DOWN"
+
+# the existing-install question has to be reachable at all, which it wasn't when
+# stdin was the test: `curl | bash` pipes the script in, so `[ -t 0 ]` is false and
+# the menu could never appear in the one case it exists for.
+ASK=$(mktemp -d); mkdir -p "$ASK/pub/releases/latest/download"
+cp install.sh "$ASK/i.sh"
+install -m 755 "$SD" "$ASK/pub/releases/latest/download/$asset"
+askcmd="env HOME=$ASK SHELL=/bin/bash PATH=/usr/bin:/bin SIMPLEDIR_BASE_URL=file://$ASK/pub SIMPLEDIR_SOURCE_URL=file://$ROOT bash $ASK/i.sh"
+bash -c "$askcmd" </dev/null >/dev/null 2>&1
+out=$(printf 'u\n' | script -qec "$askcmd" /dev/null 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
+has "the menu offers repair"     "repair"    "$out"
+has "the menu offers uninstall"  "uninstall"  "$out"
+has "the menu offers cancel"     "cancel"    "$out"
+has "the menu asks a question"   "what should i do" "$out"
+has "the answer uninstalls"      "removed"   "$out"
+check "uninstall over a pty removed the binary" 0 bash -c "! test -e '$ASK/.local/bin/sd'"
+check "the question appears once"  0 bash -c \
+  "[[ \$(printf '%s' \"\$1\" | grep -c 'what should i do') -eq 1 ]]" _ "$out"
+rm -rf "$ASK"
+
+# cancel, in its own home: the run above uninstalled, so there is nothing left to
+# ask about and a second run would just install
+CANCEL=$(mktemp -d); mkdir -p "$CANCEL/pub/releases/latest/download"
+cp install.sh "$CANCEL/i.sh"
+install -m 755 "$SD" "$CANCEL/pub/releases/latest/download/$asset"
+cancelcmd="env HOME=$CANCEL SHELL=/bin/bash PATH=/usr/bin:/bin SIMPLEDIR_BASE_URL=file://$CANCEL/pub SIMPLEDIR_SOURCE_URL=file://$ROOT bash $CANCEL/i.sh"
+bash -c "$cancelcmd" </dev/null >/dev/null 2>&1
+out=$(printf 'c\n' | script -qec "$cancelcmd" /dev/null 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
+has "cancel says so"             "nothing was changed" "$out"
+check "cancel left the binary"    0 test -x "$CANCEL/.local/bin/sd"
+rm -rf "$CANCEL"
+
+# with no terminal at all there is nothing to ask on, and it must say that rather
+# than print a question nobody can answer
+NOTTY=$(mktemp -d); mkdir -p "$NOTTY/pub/releases/latest/download"
+cp install.sh "$NOTTY/i.sh"
+install -m 755 "$SD" "$NOTTY/pub/releases/latest/download/$asset"
+bash -c "env HOME=$NOTTY SHELL=/bin/bash PATH=/usr/bin:/bin SIMPLEDIR_BASE_URL=file://$NOTTY/pub SIMPLEDIR_SOURCE_URL=file://$ROOT bash $NOTTY/i.sh" \
+  </dev/null >/dev/null 2>&1
+out=$(bash -c "env HOME=$NOTTY SHELL=/bin/bash PATH=/usr/bin:/bin SIMPLEDIR_BASE_URL=file://$NOTTY/pub SIMPLEDIR_SOURCE_URL=file://$ROOT bash $NOTTY/i.sh" </dev/null 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
+has "no terminal is reported"    "no terminal to ask on" "$out"
+lacks "no terminal prints no question" "what should i do" "$out"
+check "it still repairs"          0 test -x "$NOTTY/.local/bin/sd"
+rm -rf "$NOTTY"
+
 contains "install.sh validates pm" "must be yay" env SIMPLEDIR_PM=brew bash "$ROOT/install.sh"
 check "install.sh bad pm exits 1" 1 env SIMPLEDIR_PM=brew bash "$ROOT/install.sh"
 

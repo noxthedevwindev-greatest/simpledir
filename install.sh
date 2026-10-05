@@ -71,6 +71,46 @@ ASSET="sd-linux-$ARCH"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# the version currently installed, or empty if there isn't one
+installed_version() {
+  [ -x "$SD" ] || return 0
+  "$SD" --version 2>/dev/null | sed -n 's/^sd \([0-9][0-9.]*\).*/\1/p'
+}
+
+# is $1 older than $2? a plain numeric field-by-field compare; these are the two
+# or three numbers a release tag ever has.
+older_than() {
+  [ "$1" != "$2" ] || return 1
+  [ "$(printf '%s\n%s\n' "$2" "$1" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)" = "$1" ]
+}
+
+ALLOW_DOWNGRADE="${SIMPLEDIR_ALLOW_DOWNGRADE:-0}"
+
+# Ask a question and put the answer in REPLY. Reads the terminal, not stdin: when
+# this script is piped into bash, stdin is the script and /dev/tty is the user's
+# keyboard. Returns non-zero when there is no terminal at all, so callers can
+# decide what to do rather than silently guessing.
+REPLY=""
+ask() { # ask <default>
+  if [ -t 0 ]; then
+    printf '  what should i do? [r/u/c] ' >&2
+    read -r REPLY || REPLY=""
+  elif exec 3</dev/tty 2>/dev/null; then
+    # Opening it is the only reliable test. `[ -r /dev/tty ]` is true whenever the
+    # node exists and the mode allows it, even with no controlling terminal, and
+    # the read then dies with ENXIO — which read as "asked, got nothing" and so
+    # silently took the default.
+    printf '  what should i do? [r/u/c] ' >&3
+    read -r REPLY <&3 || REPLY=""
+    exec 3<&-
+  else
+    return 1
+  fi
+  [ -z "$REPLY" ] && REPLY=$1
+  printf '\n' >&2
+  return 0
+}
+
 compiler() { # prints the name of a C++ compiler, or nothing
   if have g++; then echo g++
   elif have clang++; then echo clang++
@@ -130,6 +170,26 @@ obtain() {
       # refuse anything that isn't our tool: a 404 page would otherwise get
       # chmod +x'd into your PATH
       if "$work/sd" --version 2>/dev/null | grep -q '^sd '; then
+        got=$("$work/sd" --version | sed -n 's/^sd \([0-9][0-9.]*\).*/\1/p')
+        # $(...), not a bare word: `have=installed_version` assigns the literal
+        # string, and the comparison below then quietly compares against it
+        have=$(installed_version)
+        # `releases/latest/download/` is a redirect, and redirects get cached. A
+        # stale one hands you the previous release, and an installer that only
+        # checks "is this our tool?" will happily downgrade you. It did, silently,
+        # to 6.5.0 while 7.0.0 was published.
+        if [ -n "$have" ] && [ -n "$got" ] && older_than "$got" "$have"; then
+          warn "the download is v$got but v$have is already installed."
+          warn "that's a stale mirror or cache of releases/latest/download, not a real downgrade."
+          if [ "$ALLOW_DOWNGRADE" = "1" ]; then
+            warn "installing it anyway, because SIMPLEDIR_ALLOW_DOWNGRADE=1."
+          else
+            warn "not installing it. to override: SIMPLEDIR_ALLOW_DOWNGRADE=1 bash $0"
+            warn "or build from the source you already have: bash $0 --source"
+            rm -rf "$work"
+            exit 1
+          fi
+        fi
         info "got $("$work/sd" --version)"
         cp "$work/sd" "$dest"
         ok=1
@@ -244,20 +304,20 @@ handle_existing() {
     return 0
   fi
 
-  if [ ! -t 0 ]; then
-    warn "not a terminal, so not asking. repairing the install (pass --uninstall to remove it)."
+  printf '\n'
+  printf '  \033[1mr\033[0mepair    replace the binaries and refresh the wrapper (default)\n'
+  printf '  \033[1mu\033[0mninstall  remove the binaries and the wrapper, keep your aliases\n'
+  printf '  \033[1mc\033[0mancel    leave everything as it is and do nothing\n\n'
+
+  # `curl ... | bash` is the documented install path, and there stdin is a pipe,
+  # so `[ -t 0 ]` is false and the question could never be asked — the exact case
+  # the question exists for. /dev/tty is still the terminal in that situation.
+  if ! ask r; then
+    warn "no terminal to ask on. repairing the install (pass --uninstall to remove it)."
     return 0
   fi
 
-  printf '\n'
-  printf '  \033[1mr\033[0mepair   replace the binaries and refresh the wrapper (default)\n'
-  printf '  \033[1mu\033[0mninstall remove the binaries and the wrapper, keep your aliases\n'
-  printf '  \033[1mc\033[0mancel   leave everything as it is and do nothing\n\n'
-  printf '  what should i do? [r/u/c] '
-
-  local answer=""
-  read -r answer || answer=""
-  case "${answer:-r}" in
+  case "$REPLY" in
     u|U) MODE=uninstall ;;
     c|C) info "cancelled. nothing was changed."; exit 0 ;;
     *)   info "repairing" ;;

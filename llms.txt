@@ -207,6 +207,9 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ## Version history
 
+- 7.0.1 — the installer's existing-install menu is reachable under
+  `curl | bash` (it reads /dev/tty, not stdin), and a stale cached
+  `releases/latest/download` redirect can no longer downgrade you silently.
 - 7.0.0 — `sdcfg prompt bash|zsh`: the shell wrapper records `SD_ALIAS` and
   `SD_JUMPED_TO`, and the snippet draws the alias in the prompt while `$PWD` still
   matches where the jump landed, so a plain `cd` clears it with no hook and no
@@ -246,7 +249,7 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ```
 make        # one g++ invocation over one file
-make test   # 372 assertions against the compiled binary, no network
+make test   # 391 assertions against the compiled binary, no network
 make assets # dist/ (the binary, sd.cpp, install.sh, mode 755)
 make release
 ```
