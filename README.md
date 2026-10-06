@@ -564,27 +564,36 @@ zero would do — and the installer is only mentioned now for the case where
 
 ## what's new in 6.4
 
-**`--to` works for every version ever published, including the two that have no
-binary at all.** v1.0.0 and v2.0.0 were never given a release asset — but the
-program is right there in the tag, one executable file called `simpledir`. so
-`--to` falls back to the source of the tag and tells you that's what it did:
+**`--to` reaches every published version. two of them are broken, and you should
+not install either.**
+
+`v1.0.0` and `v2.0.0` were the pure-python build and they are **broken and
+unsupported**. there is no binary for either — they were never given a release asset
+— there is no config migration path forward from them, and `v1.0.0` is worse than
+merely old: that tag was cut one commit late, at the bump to 2.0.0, so the program
+inside it calls itself 2.0.0. installing it gets you an unmaintained python script
+that misreports its own version. don't.
+
+`sdcfg update --to <tag>` still *reaches* them anyway, because the program is in
+the tag as one executable file, and it says where it got it rather than pretending
+it downloaded something:
 
 ```
 $ sdcfg update --to v2.0.0
   that release has no binary attached, so this is the source file from the tag
 ```
 
-and if the tag's own `--version` disagrees with the tag name, it says so instead
-of quietly believing one of them:
+and when a tag's own `--version` disagrees with the tag name, it reports that
+instead of quietly believing one of the two:
 
 ```
   note: you asked for v1.0.0, and that release's own --version says 2.0.0.
   the tag was cut from a commit whose version string had already moved on.
 ```
 
-(that's a real historical mistake in this repo's tags, not a hypothetical: the
-v1.0.0 tag contains a program whose VERSION string says 2.0.0. it stays that way
-— rewriting a published tag helps nobody.)
+the tags stay. a broken old release is still history, and quietly deleting it
+would only make the record harder to trust — but nothing here should point a new
+user at one.
 
 ## what's new in 6.3
 
