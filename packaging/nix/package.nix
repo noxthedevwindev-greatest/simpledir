@@ -1,13 +1,13 @@
 { lib
-, stdenv
+, staticStdenv
 , fetchFromGitHub
 , curl
 , makeWrapper
 }:
 
-stdenv.mkDerivation (finalAttrs: {
+staticStdenv.mkDerivation (finalAttrs: {
   pname = "simpledir";
-  version = "6.0.0";
+  version = "10.0.0";
 
   src = fetchFromGitHub {
     owner = "noxthedevwindev-greatest";
@@ -27,12 +27,15 @@ stdenv.mkDerivation (finalAttrs: {
 
   enableParallelBuilding = true;
 
-  # one source file, one compiler invocation. statically linked against
-  # libstdc++ so the binary doesn't inherit this nixpkgs' gcc into a runtime
-  # closure the size of a distro.
+  # One source file, one compiler invocation. Fully static, so the binary doesn't
+  # inherit this nixpkgs' glibc into a runtime closure the size of a distro --
+  # and because the dynamic loader costs ~650us before main() runs, which is more
+  # than this program spends doing its job. staticStdenv supplies a static libc,
+  # so the fallback the Makefile needs is unnecessary here.
   buildPhase = ''
     runHook preBuild
-    $CXX -std=c++17 -O2 -static-libstdc++ -static-libgcc -o sd sd.cpp
+    $CXX -std=c++17 -O2 -static -ffunction-sections -fdata-sections \
+      -Wl,--gc-sections -o sd sd.cpp
     runHook postBuild
   '';
 

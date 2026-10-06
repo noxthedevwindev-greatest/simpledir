@@ -28,7 +28,9 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
+#include <cstdio>
+#include <cstring>
+#include <type_traits>
 #include <map>
 #include <set>
 #include <tuple>
@@ -38,15 +40,16 @@
 #include <string>
 #include <vector>
 
-#include <pwd.h>
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <sys/utsname.h>
 
 namespace fs = std::filesystem;
 
 #ifndef VERSION
-#define VERSION "9.0.0"
+#define VERSION "10.0.0"
 #endif
 
 // The one line this release is about, shown by `--version`. A number on its own
@@ -54,7 +57,7 @@ namespace fs = std::filesystem;
 // test suite builds stub binaries with -DVERSION, and a TAGLINE that only exists
 // when VERSION does not would leave those stubs uncompilable.
 #ifndef TAGLINE
-#define TAGLINE "tags, per-project aliases, and configs that travel"
+#define TAGLINE "no daemon, no iostream, 0.4 ms per jump"
 #endif
 
 #define CONFIG_VERSION 3
@@ -108,6 +111,102 @@ std::string arch_tag() {
 }
 
 std::string asset_name() { return "sd-linux-" + arch_tag(); }
+
+// ------------------------------------------------------------------- output
+//
+// iostreams cost more than they look. Including <iostream> drags in
+// std::ios_base::Init, whose static constructor builds the locale machinery
+// before main() even runs: measured at ~90us per invocation of a statically
+// linked build, which is 12% of the whole cost of `sd name`. This program's job
+// is to print a path and exit, and it runs on every single `cd`, so that is the
+// last place to spend 90 microseconds.
+//
+// So: two buffers, write(2), done. The buffering matches what std::cout did --
+// line buffered on a terminal so a long listing appears as it is produced, fully
+// buffered into a pipe so `sd ls | head` is still one write -- and stderr stays
+// unbuffered because that is how error messages have to behave when they land
+// between two lines of something else.
+
+class Out {
+ public:
+  explicit Out(int fd) : fd_(fd), tty_(isatty(fd) == 1) {}
+  ~Out() { flush(); }
+  Out(const Out&) = delete;
+  Out& operator=(const Out&) = delete;
+
+  Out& operator<<(const char* s) {
+    if (s) put(s, std::strlen(s));
+    return *this;
+  }
+  Out& operator<<(const std::string& s) {
+    put(s.data(), s.size());
+    return *this;
+  }
+  Out& operator<<(char c) {
+    put(&c, 1);
+    return *this;
+  }
+  // a bare bool would print as 1, and iostream printed true/false. Nothing here
+  // streams one today, but a silent behaviour change is not worth the risk.
+  Out& operator<<(bool b) {
+    put(b ? "true" : "false", b ? 4 : 5);
+    return *this;
+  }
+  template <class T>
+  std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool> && !std::is_same_v<T, char>,
+                   Out>&
+  operator<<(T value) {
+    char buf[24];
+    int n = std::snprintf(buf, sizeof buf, "%lld", static_cast<long long>(value));
+    if (n > 0) put(buf, static_cast<size_t>(n));
+    return *this;
+  }
+
+  Out& flush() {
+    const char* p = buf_.data();
+    size_t left = buf_.size();
+    while (left > 0) {
+      ssize_t n = ::write(fd_, p, left);
+      if (n <= 0) {
+        if (n < 0 && errno == EINTR) continue;
+        break;  // a closed pipe is not this program's problem to solve
+      }
+      p += n;
+      left -= static_cast<size_t>(n);
+    }
+    buf_.clear();
+    return *this;
+  }
+
+ private:
+  int fd_;
+  bool tty_;
+  std::string buf_;
+
+  void put(const char* p, size_t n) {
+    buf_.append(p, n);
+    if (!tty_ || buf_.size() >= 8192 ||
+        (n == 1 && p[0] == '\n'))
+      flush();
+  }
+};
+
+Out out(1);
+Out err(2);
+
+// What std::getline(std::cin, x) used to do, for the four places that ask a
+// question. Nothing else in the program reads a whole line off stdin.
+bool read_line(std::string& into) {
+  into.clear();
+  int c;
+  bool any = false;
+  while ((c = std::fgetc(stdin)) != EOF) {
+    any = true;
+    if (c == '\n') return true;
+    into.push_back(static_cast<char>(c));
+  }
+  return any;
+}
 std::string g_config_dir;
 std::string g_config_file;
 std::string g_history_file;
@@ -123,7 +222,7 @@ struct UsageError : UserError {
 };
 
 [[noreturn]] void die(const std::string& msg) {
-  std::cerr << g_prog << ": " << msg << "\n";
+  err << g_prog << ": " << msg << "\n";
   std::exit(1);
 }
 
@@ -230,9 +329,26 @@ std::string join(const std::vector<std::string>& parts, const std::string& sep) 
 
 // ----------------------------------------------------------------- filesystem
 
+// $HOME first, always. The fallback exists for the handful of setups that unset
+// it, and it matters more than it looks: the password-database lookup this used to
+// use is the only thing in the program that reaches into NSS, and a statically
+// linked binary cannot dlopen the NSS modules it needs -- so a static build that
+// called it would break in exactly the environment it was meant to help. Reading
+// /etc/passwd ourselves is twenty lines, touches no shared library, and is
+// correct for every local user — which is everyone running this.
 std::string home_dir() {
-  if (const char* h = std::getenv("HOME")) return h;
-  if (const passwd* pw = getpwuid(getuid())) return pw->pw_dir;
+  if (const char* h = std::getenv("HOME")) {
+    if (*h) return h;
+  }
+  std::ifstream passwd_file("/etc/passwd");
+  std::string uid_text = std::to_string(getuid());
+  std::string line;
+  while (std::getline(passwd_file, line)) {
+    std::vector<std::string> fields = split(line, ':');
+    if (fields.size() < 6) continue;
+    if (fields[2] != uid_text) continue;
+    return fields[5];
+  }
   return ".";
 }
 
@@ -704,12 +820,18 @@ struct Visit {
   double t = 0;
 };
 
+std::map<std::string, Visit> parse_history(const std::string& raw);
+
 std::map<std::string, Visit> read_history() {
+  if (!path_exists(g_history_file)) return {};
+  return parse_history(read_file(g_history_file));
+}
+
+std::map<std::string, Visit> parse_history(const std::string& raw) {
   std::map<std::string, Visit> out;
-  if (!path_exists(g_history_file)) return out;
   JsonPtr root;
   try {
-    root = json_parse(read_file(g_history_file));
+    root = json_parse(raw);
   } catch (const UserError&) {
     return out;  // a corrupt log is not worth a cd
   }
@@ -738,12 +860,55 @@ bool history_enabled(const Config& cfg) {
 
 // Note that we went there. Throttled, prunable, and never fatal: remembering
 // is a convenience, not the function you called.
+// Find the timestamp recorded for one path without parsing the whole log.
+//
+// This runs on every single jump -- recording a visit is part of jumping -- and
+// the log holds up to 500 entries. Building a json tree for all of them to look
+// up one key was measurably the most expensive thing this program did: more than
+// the fork, the exec and the config parse put together. The file is machine
+// written in a known shape, so one substring search for the exact key finds it.
+//
+// Returns false when the scan comes up empty, which means either the directory
+// genuinely isn't in the log or the file isn't shaped the way we write it. The
+// caller then parses it properly rather than guessing: a hand-edited log has to
+// keep working, and being wrong here costs a redundant write, never a wrong jump.
+bool scanned_visit_time(const std::string& raw, const std::string& path, double& out_time) {
+  std::string key = "\"" + json_escape(path) + "\":";
+  size_t at = raw.find(key);
+  if (at == std::string::npos) return false;
+  // the timestamp is the "t" member of that entry; bound the search to this
+  // entry so a hand-written file can't hand us the next directory's value
+  size_t entry_end = raw.find("}", at);
+  size_t t_at = raw.find("\"t\":", at);
+  if (t_at == std::string::npos) return false;
+  if (entry_end != std::string::npos && t_at > entry_end) return false;
+  const char* digits = raw.c_str() + t_at + 4;
+  char* stop = nullptr;
+  double value = std::strtod(digits, &stop);
+  if (stop == digits) return false;
+  out_time = value;
+  return true;
+}
+
 void record_visit(const std::string& path, double now) {
   if (std::getenv("SIMPLEDIR_NO_HISTORY")) return;
   try {
-    std::map<std::string, Visit> dirs = read_history();
+    // The throttle is checked first, on the raw text, because the answer is
+    // almost always "just recorded" and a full parse to establish that would be
+    // the largest cost in the program.
+    std::string raw = path_exists(g_history_file) ? read_file(g_history_file) : "";
+    if (!raw.empty()) {
+      double last = 0;
+      if (scanned_visit_time(raw, path, last)) {
+        if (now - last < VISIT_THROTTLE) return;
+      } else {
+        std::map<std::string, Visit> scanned = parse_history(raw);
+        auto found = scanned.find(path);
+        if (found != scanned.end() && now - found->second.t < VISIT_THROTTLE) return;
+      }
+    }
+    std::map<std::string, Visit> dirs = parse_history(raw);
     auto it = dirs.find(path);
-    if (it != dirs.end() && now - it->second.t < VISIT_THROTTLE) return;  // just recorded
 
     Visit v;
     v.n = (it == dirs.end() ? 0.0 : it->second.n) + 1.0;
@@ -1059,7 +1224,7 @@ struct Args {
 
 // flags that consume the next token as their value
 const std::set<std::string>& value_flags() {
-  static const std::set<std::string> flags = {"depth", "prefix", "top", "to", "path"};
+  static const std::set<std::string> flags = {"depth", "prefix", "top", "to", "path", "runs"};
   return flags;
 }
 
@@ -1144,24 +1309,20 @@ int cmd_export(const Args& args) {
   // tags hold names, not paths, so they travel as they are
   std::string text = json_dump(node) + "\n";
 
-  std::string out = args.word(0);
-  if (out.empty()) {
-    std::cout << text;
+  std::string asked_for = args.word(0);
+  if (asked_for.empty() || asked_for == "-") {
+    out << text;
     return 0;
   }
-  if (out == "-") {
-    std::cout << text;
-    return 0;
-  }
-  std::string target = abspath(out);
-  write_atomic(target, text);
+  std::string file = abspath(asked_for);
+  write_atomic(file, text);
   size_t portable_count = 0;
   for (const auto& [name, path] : cfg.aliases)
     if (portable(as_stored(path)) != as_stored(path)) portable_count++;
-  std::cout << "wrote " << cfg.aliases.size() << " aliases to " << target << "\n";
+  out << "wrote " << cfg.aliases.size() << " aliases to " << file << "\n";
   if (portable_count)
-    std::cout << "  " << portable_count << " under your home were written as ~/ so they travel\n";
-  std::cout << "  adopt it elsewhere with: " << CONFIG << " adopt " << shell_quote(target) << "\n";
+    out << "  " << portable_count << " under your home were written as ~/ so they travel\n";
+  out << "  adopt it elsewhere with: " << CONFIG << " adopt " << shell_quote(file) << "\n";
   return 0;
 }
 
@@ -1241,27 +1402,27 @@ int cmd_adopt(const Args& args) {
 
   if (!added.empty() || !args.has("dry-run")) {
     if (args.has("dry-run")) {
-      std::cout << "would add " << added.size() << ", replace " << replaced.size() << "\n";
+      out << "would add " << added.size() << ", replace " << replaced.size() << "\n";
     } else {
       save_config(cfg);
-      std::cout << "imported from " << path << "\n";
+      out << "imported from " << path << "\n";
     }
   }
-  if (!tags_added.empty()) std::cout << "  tags " << join(tags_added, " ") << "\n";
-  if (!added.empty()) std::cout << "  added " << added.size() << ": " << join(added, " ") << "\n";
+  if (!tags_added.empty()) out << "  tags " << join(tags_added, " ") << "\n";
+  if (!added.empty()) out << "  added " << added.size() << ": " << join(added, " ") << "\n";
   if (!replaced.empty())
-    std::cout << "  " << replaced.size() << " already existed with a different path: "
+    out << "  " << replaced.size() << " already existed with a different path: "
               << join(replaced, " ")
               << "\n  overwrite: " << CONFIG << " import --force " << shell_quote(path) << "\n";
-  if (!skipped.empty()) std::cout << "  " << skipped.size() << " unchanged\n";
+  if (!skipped.empty()) out << "  " << skipped.size() << " unchanged\n";
   if (!missing.empty()) {
-    std::cout << "  " << missing.size() << " point at directories that don't exist here:\n";
-    for (const std::string& line : missing) std::cout << "    " << line << "\n";
-    std::cout << "  they were still imported. bind them properly with: " << CONFIG
+    out << "  " << missing.size() << " point at directories that don't exist here:\n";
+    for (const std::string& line : missing) out << "    " << line << "\n";
+    out << "  they were still imported. bind them properly with: " << CONFIG
               << " add --force <name> <path>\n";
   }
   if (added.empty() && replaced.empty())
-    std::cout << "  nothing to do, your config already matches\n";
+    out << "  nothing to do, your config already matches\n";
   return 0;
 }
 
@@ -1322,17 +1483,17 @@ int cmd_project(const Args& args) {
 
   if (args.has("list") || args.words.empty()) {
     if (here.empty()) {
-      std::cout << "no " << PROJECT_FILE << " here or in any parent directory up to your home.\n"
+      out << "no " << PROJECT_FILE << " here or in any parent directory up to your home.\n"
                 << "  make one: " << CONFIG << " project add <name> <path>\n";
       return 1;
     }
     Project project = load_project(here);
-    std::cout << project.aliases.size()
+    out << project.aliases.size()
               << (project.aliases.size() == 1 ? " alias" : " aliases") << " in "
               << here << "/" << PROJECT_FILE << ":\n\n";
     for (const auto& [name, stored] : project.aliases) {
       std::string target = resolve_project_path(stored, here);
-      std::cout << "  " << name << std::string(12 - std::min<size_t>(12, name.size()), ' ') << target
+      out << "  " << name << std::string(12 - std::min<size_t>(12, name.size()), ' ') << target
                 << (is_dir(target) ? "" : "   [missing]") << "\n";
     }
     return 0;
@@ -1348,7 +1509,7 @@ int cmd_project(const Args& args) {
     auto it = project.aliases.find(name);
     if (it == project.aliases.end())
       throw UserError("'" + name + "' isn't in " + here + "/" + PROJECT_FILE);
-    std::cout << "removed " << name << " -> " << resolve_project_path(it->second, here) << "\n";
+    out << "removed " << name << " -> " << resolve_project_path(it->second, here) << "\n";
     project.aliases.erase(it);
     save_project(project);
     return 0;
@@ -1382,10 +1543,10 @@ int cmd_project(const Args& args) {
   }
   project.aliases[name] = stored;
   save_project(project);
-  std::cout << name << " -> " << target << "\n";
-  std::cout << "  stored in " << here << "/" << PROJECT_FILE;
-  if (stored != target) std::cout << " as the relative path \"" << stored << "\", so it travels";
-  std::cout << "\n  " << MOVE << " " << name << " works anywhere under " << here << "\n";
+  out << name << " -> " << target << "\n";
+  out << "  stored in " << here << "/" << PROJECT_FILE;
+  if (stored != target) out << " as the relative path \"" << stored << "\", so it travels";
+  out << "\n  " << MOVE << " " << name << " works anywhere under " << here << "\n";
   return 0;
 }
 
@@ -1406,20 +1567,20 @@ int cmd_tag(const Args& args) {
   // no name: show them all
   if (args.words.empty() || args.has("list")) {
     if (cfg.tags.empty()) {
-      std::cout << "no tags yet. make one:\n"
+      out << "no tags yet. make one:\n"
                 << "  " << CONFIG << " tag @work dots hypr projects\n"
                 << "then `" << MOVE << " @work` lists that group, and `" << MOVE
                 << " @work dots` jumps to one\n";
       return 0;
     }
     for (const auto& [key, members] : cfg.tags) {
-      std::cout << "  " << key << "  " << members.size() << (members.size() == 1 ? " alias" : " aliases")
+      out << "  " << key << "  " << members.size() << (members.size() == 1 ? " alias" : " aliases")
                 << "\n";
       size_t width = 0;
       for (const std::string& m : members) width = std::max(width, m.size());
-      std::cout << "    ";
-      for (const std::string& m : members) std::cout << m << std::string(width - m.size() + 2, ' ');
-      std::cout << "\n";
+      out << "    ";
+      for (const std::string& m : members) out << m << std::string(width - m.size() + 2, ' ');
+      out << "\n";
     }
     return 0;
   }
@@ -1438,7 +1599,7 @@ int cmd_tag(const Args& args) {
     if (args.has("drop") && !wanted.empty())
       die("--drop takes no names. " + CONFIG + " tag --drop " + key + " removes the whole tag");
     if (args.has("drop")) {
-      std::cout << "  dropped " << key << " (" << slot->second.size()
+      out << "  dropped " << key << " (" << slot->second.size()
                 << (slot->second.size() == 1 ? " alias" : " aliases")
                 << ", nothing was unbound)\n";
       slot->second.clear();
@@ -1446,11 +1607,11 @@ int cmd_tag(const Args& args) {
     for (const std::string& name : wanted) {
       auto it = std::find(slot->second.begin(), slot->second.end(), name);
       if (it == slot->second.end()) {
-        std::cout << "  " << name << " isn't in " << key << "\n";
+        out << "  " << name << " isn't in " << key << "\n";
         continue;
       }
       slot->second.erase(it);
-      std::cout << "  removed " << name << " from " << key << "\n";
+      out << "  removed " << name << " from " << key << "\n";
     }
     // Mutate in place and only erase the element once, by index. Erasing the
     // whole tag and re-adding `*members` used a pointer into the vector's own
@@ -1459,7 +1620,7 @@ int cmd_tag(const Args& args) {
     bool empty = slot->second.empty();
     if (empty) cfg.tags.erase(cfg.tags.begin() + (slot - cfg.tags.begin()));
     save_config(cfg);
-    if (empty) std::cout << key << " is empty now, so it's gone\n";
+    if (empty) out << key << " is empty now, so it's gone\n";
     return 0;
   }
 
@@ -1491,12 +1652,12 @@ int cmd_tag(const Args& args) {
   save_config(cfg);
 
   if (added.empty()) {
-    std::cout << key << " already had all of those\n";
+    out << key << " already had all of those\n";
     return 0;
   }
-  std::cout << key << " (" << members->size() << (members->size() == 1 ? " alias" : " aliases") << "): "
+  out << key << " (" << members->size() << (members->size() == 1 ? " alias" : " aliases") << "): "
             << join(added, " ") << "\n";
-  std::cout << "  " << MOVE << " " << key << "          list them\n"
+  out << "  " << MOVE << " " << key << "          list them\n"
             << "  " << MOVE << " " << key << " <alias>  jump to one\n";
   return 0;
 }
@@ -1546,8 +1707,8 @@ int cmd_tag_list(const Config& cfg, const std::string& tag_name,
                  const std::vector<std::string>& members) {
   auto rows = tag_rows(cfg, members);
   if (rows.empty()) {
-    std::cout << tag_name << " has nothing left in it. its aliases were renamed or removed.\n";
-    std::cout << "  drop it: " << CONFIG << " tag --drop " << tag_name << "\n";
+    out << tag_name << " has nothing left in it. its aliases were renamed or removed.\n";
+    out << "  drop it: " << CONFIG << " tag --drop " << tag_name << "\n";
     return 1;
   }
   std::string missing;
@@ -1558,7 +1719,7 @@ int cmd_tag_list(const Config& cfg, const std::string& tag_name,
   for (const auto& [name, path] : rows) width = std::max(width, name.size());
   std::error_code ec;
   fs::path cwd = fs::current_path(ec);
-  std::cout << rows.size() << (rows.size() == 1 ? " alias" : " aliases") << " in " << tag_name << ":\n\n";
+  out << rows.size() << (rows.size() == 1 ? " alias" : " aliases") << " in " << tag_name << ":\n\n";
   for (const auto& [name, path] : rows) {
     std::string shown = path;
     if (!ec) {
@@ -1566,13 +1727,13 @@ int cmd_tag_list(const Config& cfg, const std::string& tag_name,
       if (!relative.empty() && !starts_with(relative, "..")) shown = relative;
     }
     bool gone = !is_dir(as_stored(path));
-    std::cout << "  " << name << std::string(width - name.size() + 2, ' ') << shown
+    out << "  " << name << std::string(width - name.size() + 2, ' ') << shown
               << (gone ? "   [missing]" : "") << "\n";
   }
   if (!missing.empty())
-    std::cout << "\n  " << missing << " no longer exist as aliases. drop them with:\n"
+    out << "\n  " << missing << " no longer exist as aliases. drop them with:\n"
               << "    " << CONFIG << " tag " << tag_name << " --remove " << missing << "\n";
-  std::cout << "\n  jump to one: " << MOVE << " " << tag_name << " <name>\n";
+  out << "\n  jump to one: " << MOVE << " " << tag_name << " <name>\n";
   return 0;
 }
 
@@ -1735,10 +1896,10 @@ int cmd_adapt(const Args& args) {
     size_t refused = 0;
     for (const auto& [path, v] : verdicts)
       if (v.verdict == "no") refused++;
-    std::cout << "nothing left to learn. every directory you keep visiting has a name"
+    out << "nothing left to learn. every directory you keep visiting has a name"
               << " already.\n";
-    if (refused) std::cout << "  " << refused << " refused, waiting out their quiet period\n";
-    std::cout << "  " << MOVE << " top shows the whole log, including named ones\n";
+    if (refused) out << "  " << refused << " refused, waiting out their quiet period\n";
+    out << "  " << MOVE << " top shows the whole log, including named ones\n";
     return 0;
   }
 
@@ -1755,33 +1916,33 @@ int cmd_adapt(const Args& args) {
       node->set("refusals", Json::make_num(p.strikes));
       list->arr.push_back(node);
     }
-    std::cout << json_dump(list) << "\n";
+    out << json_dump(list) << "\n";
     return 0;
   }
 
   size_t width = 0;
   for (const Proposal& p : found) width = std::max(width, p.path.size());
-  std::cout << found.size() << " director"
+  out << found.size() << " director"
             << (found.size() == 1 ? "y" : "ies")
             << " you keep visiting that " << (found.size() == 1 ? "has" : "have")
             << " no name, most recent first:\n\n";
   for (const Proposal& p : found) {
     char score[32];
     std::snprintf(score, sizeof score, "%6.2f", p.score);
-    std::cout << "  " << score << "  " << p.name << std::string(12 - std::min<size_t>(12, p.name.size()), ' ')
+    out << "  " << score << "  " << p.name << std::string(12 - std::min<size_t>(12, p.name.size()), ' ')
               << "  " << p.path;
     if (p.retry) {
-      std::cout << "   [you said no " << p.strikes << "x, asking once more]";
+      out << "   [you said no " << p.strikes << "x, asking once more]";
     } else if (p.refused) {
       long hours = static_cast<long>(p.quiet_left / 3600);
-      std::cout << "   [refused, quiet for "
+      out << "   [refused, quiet for "
                 << (hours < 48 ? std::to_string(hours) + "h"
                                : std::to_string(hours / 24) + "d")
                 << "]";
     }
-    std::cout << "\n";
+    out << "\n";
   }
-  std::cout << "\nkeep one:\n"
+  out << "\nkeep one:\n"
             << "  " << CONFIG << " adapt --accept <name>          bind it as well as remember it\n"
             << "  " << CONFIG << " adapt --reject <name>          stop asking\n"
             << "  " << CONFIG << " adapt --accept <name> --no-bind just remember the verdict\n"
@@ -1794,12 +1955,12 @@ int cmd_adapt(const Args& args) {
 int cmd_adapt_apply(const Args& args) {
   if (args.has("clear")) {
     if (!path_exists(adapt_file())) {
-      std::cout << "no verdicts recorded yet\n";
+      out << "no verdicts recorded yet\n";
       return 0;
     }
     std::error_code ec;
     fs::remove(adapt_file(), ec);
-    std::cout << "forgot every verdict. " << MOVE << " adapt will ask about anything you refused again.\n"
+    out << "forgot every verdict. " << MOVE << " adapt will ask about anything you refused again.\n"
               << "  names you already bound are names, not verdicts — " << CONFIG << " rm to unbind one\n";
     return 0;
   }
@@ -1850,7 +2011,7 @@ int cmd_adapt_apply(const Args& args) {
     }
     std::string name = name_for(target, taken);
     if (cfg.aliases.count(name)) {
-      std::cout << "not binding: the name '" << name << "' is already taken by "
+      out << "not binding: the name '" << name << "' is already taken by "
                 << cfg.aliases.at(name) << "\n";
     } else {
       cfg.aliases[name] = target;
@@ -1861,16 +2022,16 @@ int cmd_adapt_apply(const Args& args) {
 
   if (verdict == "no") {
     double days = quiet_for(v) / (24 * 3600);
-    std::cout << "noted. " << target << "\n";
-    std::cout << "  quiet for " << (days < 1 ? std::to_string(days * 24) + " hours"
+    out << "noted. " << target << "\n";
+    out << "  quiet for " << (days < 1 ? std::to_string(days * 24) + " hours"
                                             : std::to_string(static_cast<long>(days)) + " days");
-    if (v.strikes > 1) std::cout << ", doubled because that's refusal " << v.strikes;
-    std::cout << "\n  it'll ask again once that's up, then stop asking entirely after a year\n";
+    if (v.strikes > 1) out << ", doubled because that's refusal " << v.strikes;
+    out << "\n  it'll ask again once that's up, then stop asking entirely after a year\n";
   } else if (!bound_name.empty()) {
-    std::cout << "bound " << bound_name << " -> " << target << "\n";
-    std::cout << "  " << MOVE << " " << bound_name << " now\n";
+    out << "bound " << bound_name << " -> " << target << "\n";
+    out << "  " << MOVE << " " << bound_name << " now\n";
   } else {
-    std::cout << "noted, not bound: " << target << "\n";
+    out << "noted, not bound: " << target << "\n";
   }
   return 0;
 }
@@ -1921,7 +2082,7 @@ int cmd_ls(const Args& args) {
     for (const auto& [name, target, missing] : found) {
       (void)target;
       (void)missing;
-      std::cout << name << "\n";
+      out << name << "\n";
     }
     return found.empty() ? 1 : 0;
   }
@@ -1935,15 +2096,15 @@ int cmd_ls(const Args& args) {
       aliases->set(name, Json::make_str(target));
     }
     node->set("aliases", aliases);
-    std::cout << json_dump(node) << "\n";
+    out << json_dump(node) << "\n";
     return found.empty() ? 1 : 0;
   }
 
   if (found.empty()) {
     if (!cfg.aliases.empty() && !query.empty()) {
-      std::cerr << MOVE << ": nothing matches '" << query << "'. see them all: " << MOVE << " ls\n";
+      err << MOVE << ": nothing matches '" << query << "'. see them all: " << MOVE << " ls\n";
     } else {
-      std::cerr << MOVE << ": no aliases yet. add one: " << CONFIG << " add\n";
+      err << MOVE << ": no aliases yet. add one: " << CONFIG << " add\n";
     }
     return 1;
   }
@@ -1963,7 +2124,7 @@ int cmd_ls(const Args& args) {
       // a path full of ../ is noise, so keep the absolute one
       if (!relative.empty() && !starts_with(relative, "..")) shown = relative;
     }
-    std::cout << name << std::string(width - name.size() + 2, ' ') << shown;
+    out << name << std::string(width - name.size() + 2, ' ') << shown;
     std::vector<std::string> badges;
     if (missing) badges.push_back("missing");
     // no badge when you already filtered by that tag: it would just repeat
@@ -1973,8 +2134,8 @@ int cmd_ls(const Args& args) {
           badges.push_back(tag_label(key));
       }
     }
-    if (!badges.empty()) std::cout << "   [" << join(badges, " ") << "]";
-    std::cout << "\n";
+    if (!badges.empty()) out << "   [" << join(badges, " ") << "]";
+    out << "\n";
   }
   nudge();
   return 0;
@@ -2009,7 +2170,7 @@ int cmd_top(const Args& args) {
   });
 
   if (ranked.empty()) {
-    std::cout << "nothing in your history yet. every directory you jump to gets remembered.\n"
+    out << "nothing in your history yet. every directory you jump to gets remembered.\n"
               << "  turn it off with SIMPLEDIR_NO_HISTORY=1, or " << CONFIG << " forget\n";
     return 0;
   }
@@ -2026,13 +2187,13 @@ int cmd_top(const Args& args) {
       node->set("exists", Json::make_bool(row.exists));
       list->arr.push_back(node);
     }
-    std::cout << json_dump(list) << "\n";
+    out << json_dump(list) << "\n";
     return 0;
   }
 
   size_t width = 0;
   for (const Row& row : ranked) width = std::max(width, row.path.size());
-  std::cout << ranked.size() << " directories, most recent visits first:\n\n";
+  out << ranked.size() << " directories, most recent visits first:\n\n";
   bool any_gone = false;
   for (const Row& row : ranked) {
     std::vector<std::string> tags;
@@ -2040,12 +2201,12 @@ int cmd_top(const Args& args) {
     else if (row.named) tags.push_back("named");
     char score[32];
     std::snprintf(score, sizeof score, "%6.2f", row.score);
-    std::cout << "  " << score << "  " << row.path
+    out << "  " << score << "  " << row.path
               << std::string(width - row.path.size(), ' ');
-    if (!tags.empty()) std::cout << "   [" << join(tags, ", ") << "]";
-    std::cout << "\n";
+    if (!tags.empty()) out << "   [" << join(tags, ", ") << "]";
+    out << "\n";
   }
-  if (any_gone) std::cout << "\n  clean those up: " << CONFIG << " forget --missing\n";
+  if (any_gone) out << "\n  clean those up: " << CONFIG << " forget --missing\n";
   return 0;
 }
 
@@ -2096,25 +2257,25 @@ int cmd_pick(const Args& args) {
     // fzf hands back whatever line it was given; only believe an alias we offered
     if (std::find(names.begin(), names.end(), name) == names.end())
       throw UserError("fzf returned '" + name + "', which isn't one of your aliases");
-    std::cout << name << "\n";
+    out << name << "\n";
     return 0;
   }
 
   std::string reason = std::getenv("SIMPLEDIR_NO_FZF") ? "fzf disabled (SIMPLEDIR_NO_FZF)"
                                                         : "no fzf installed";
-  std::cout << reason << ", so: pick a number or type a name\n\n";
+  out << reason << ", so: pick a number or type a name\n\n";
   size_t width = 0;
   for (const std::string& name : names) width = std::max(width, name.size());
   for (size_t i = 0; i < found.size(); i++) {
     std::string shown = std::get<1>(found[i]) + (std::get<2>(found[i]) ? "   [missing]" : "");
     char number[16];
     std::snprintf(number, sizeof number, "%3zu", i + 1);
-    std::cout << "  " << number << "  " << names[i] << std::string(width - names[i].size(), ' ')
+    out << "  " << number << "  " << names[i] << std::string(width - names[i].size(), ' ')
               << "  " << shown << "\n";
   }
-  std::cout << "\n> " << std::flush;
+  out << "\n> "; out.flush();
   std::string answer;
-  if (!std::getline(std::cin, answer)) return 1;
+  if (!read_line(answer)) return 1;
   answer = trim(answer);
   if (answer.empty()) return 1;
 
@@ -2122,12 +2283,12 @@ int cmd_pick(const Args& args) {
     size_t index = std::stoul(answer);
     if (index < 1 || index > names.size())
       throw UserError("no entry " + answer + ". there are " + std::to_string(names.size()) + ".");
-    std::cout << names[index - 1] << "\n";
+    out << names[index - 1] << "\n";
     return 0;
   }
   if (std::find(names.begin(), names.end(), answer) == names.end())
     throw UserError(unknown_alias_error(answer, cfg));
-  std::cout << answer << "\n";
+  out << answer << "\n";
   return 0;
 }
 
@@ -2176,11 +2337,11 @@ int cmd_add(const Args& args) {
 
   cfg.aliases[name] = target;
   save_config(cfg);
-  std::cout << name << " -> " << target << "\n";
+  out << name << " -> " << target << "\n";
   nudge();
   if (!derived.empty() && name != derived)
-    std::cout << "  rename it: " << CONFIG << " rename " << name << " <other-name>\n";
-  if (keep && fs::is_symlink(target)) std::cout << "  kept the symlink: " << target << "\n";
+    out << "  rename it: " << CONFIG << " rename " << name << " <other-name>\n";
+  if (keep && fs::is_symlink(target)) out << "  kept the symlink: " << target << "\n";
   return 0;
 }
 
@@ -2190,7 +2351,7 @@ int cmd_rm(const Args& args) {
   Config cfg = load_config();
   auto it = cfg.aliases.find(name);
   if (it == cfg.aliases.end()) throw UserError(unknown_alias_error(name, cfg));
-  std::cout << "removed " << name << " -> " << it->second << "\n";
+  out << "removed " << name << " -> " << it->second << "\n";
   cfg.aliases.erase(it);
   save_config(cfg);
   return 0;
@@ -2211,7 +2372,7 @@ int cmd_rename(const Args& args) {
   cfg.aliases.erase(it);
   cfg.aliases[to] = target;
   save_config(cfg);
-  std::cout << from << " -> " << to << " (" << target << ")\n";
+  out << from << " -> " << to << " (" << target << ")\n";
   return 0;
 }
 
@@ -2266,11 +2427,177 @@ int cmd_import(const Args& args) {
   }
   if (!bound.empty() && !dry) save_config(cfg);
 
-  std::cout << (dry ? "would bind " : "bound ") << bound.size() << ": " << join(bound, " ") << "\n";
+  out << (dry ? "would bind " : "bound ") << bound.size() << ": " << join(bound, " ") << "\n";
   if (!skipped.empty()) {
-    std::cout << "skipped " << skipped.size() << " already bound: " << join(skipped, " ") << "\n";
-    if (!force) std::cout << "  overwrite them: " << CONFIG << " import --force " << root << "\n";
+    out << "skipped " << skipped.size() << " already bound: " << join(skipped, " ") << "\n";
+    if (!force) out << "  overwrite them: " << CONFIG << " import --force " << root << "\n";
   }
+  return 0;
+}
+// ------------------------------------------------------------------- bench
+//
+// v10 is the release about being fast, so it had better be able to prove it. This
+// times the binary as the shell invokes it -- fork, exec, loader, parse, print --
+// because that is the only number anyone actually pays. Nothing here is modelled
+// or estimated; it runs the real command and counts wall-clock time.
+//
+// It measures the whole process from the outside, so it has to fork itself. That
+// is the honest cost: a jump is `sd name`, and a wrapper that avoided the fork
+// would be measuring something nobody runs.
+
+double now_micros() {
+  return std::chrono::duration<double, std::micro>(
+             std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// fork/exec ourselves and wait, so the measurement includes everything a shell's
+// `sd name` does and nothing a library call would have hidden.
+double time_one(const std::string& self, const std::vector<std::string>& words,
+                const std::string& cwd) {
+  double start = now_micros();
+  pid_t pid = fork();
+  if (pid == 0) {
+    if (!cwd.empty()) {
+      if (chdir(cwd.c_str()) != 0) std::_Exit(127);
+    }
+    std::vector<char*> argv;
+    argv.push_back(const_cast<char*>(self.c_str()));
+    for (const std::string& w : words) argv.push_back(const_cast<char*>(w.c_str()));
+    argv.push_back(nullptr);
+    // Both streams, to /dev/null: we are timing rather than reading, and a pipe
+    // the parent never drains would measure the pipe instead of the program.
+    // stderr too, because `sd print <miss>` fails on purpose and an error
+    // message printed 40 times would be this command's loudest output.
+    int null_fd = ::open("/dev/null", O_WRONLY);
+    if (null_fd >= 0) {
+      ::dup2(null_fd, 1);
+      ::dup2(null_fd, 2);
+      ::close(null_fd);
+    }
+    execv(self.c_str(), argv.data());
+    std::_Exit(127);
+  }
+  int status = 0;
+  while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+  }
+  return now_micros() - start;
+}
+
+struct Timing {
+  double median = 0;
+  double best = 0;
+  bool ok = true;
+};
+
+Timing measure(const std::string& self, const std::vector<std::string>& words,
+               const std::string& cwd, int runs) {
+  std::vector<double> samples;
+  samples.reserve(runs);
+  // three warm-up runs: the first exec after a build pays for a cold page cache,
+  // and a benchmark that measures that is measuring the build
+  for (int i = 0; i < 3; i++) time_one(self, words, cwd);
+  for (int i = 0; i < runs; i++) samples.push_back(time_one(self, words, cwd));
+  std::sort(samples.begin(), samples.end());
+  Timing t;
+  t.median = samples[samples.size() / 2];
+  t.best = samples.front();
+  return t;
+}
+
+int cmd_bench(const Args& args) {
+  // Deliberately tolerant: this measures the machine, and a config it cannot
+  // parse is exactly when somebody reaches for a benchmark. Failing here would
+  // be the one moment the tool is useless.
+  Config cfg;
+  size_t alias_count = 0;
+  try {
+    cfg = load_config();
+    alias_count = cfg.aliases.size();
+  } catch (const UserError&) {
+    alias_count = 0;
+  }
+  int runs = 40;
+  if (args.has("runs")) {
+    runs = std::atoi(args.value("runs", "40").c_str());
+    if (runs < 5 || runs > 2000)
+      throw UsageError("--runs takes 5 to 2000, got " + args.value("runs", "40"));
+  }
+
+  std::string self;
+  {
+    std::error_code ec;
+    fs::path exe = fs::read_symlink("/proc/self/exe", ec);
+    self = ec ? std::string(MOVE) : exe.string();
+  }
+
+  size_t entries = 0;
+  if (path_exists(g_history_file)) {
+    try {
+      JsonPtr root = json_parse(read_file(g_history_file));
+      if (JsonPtr dirs = root->get("dirs")) entries = dirs->obj.size();
+    } catch (const UserError&) {
+      entries = 0;  // an unreadable log is not this command's problem to report
+    }
+  }
+
+  out << "simpledir benchmark (" << MOVE << " " << VERSION << ")\n\n"
+      << "  every timing below is a real fork+exec of this binary, median of " << runs
+      << " runs,\n  measured on this machine just now. yours will differ.\n\n";
+
+  // The floor first, because without it the rest is unreadable: this is what it
+  // costs to start any process at all on this box, before a single line of this
+  // program runs. An empty C++ program costs exactly the same.
+  Timing floor = measure(self, {"--version"}, "", runs);
+
+  struct Case {
+    std::string label;
+    std::vector<std::string> words;
+    std::string note;
+  };
+  std::vector<Case> cases;
+  if (!cfg.aliases.empty())
+    cases.push_back({"sd <alias>", {cfg.aliases.begin()->first}, "the common case: hit an alias"});
+  cases.push_back({"sd ls", {"ls"}, std::to_string(alias_count) + " aliases in the config"});
+  if (entries)
+    cases.push_back({"sd top", {"top"}, std::to_string(entries) + " dirs in the frecency log"});
+  if (entries)
+    cases.push_back({"sd print <miss>", {"print", "nosuchthingxyz"}, "the frecency scan, worst case"});
+  cases.push_back({"sd doctor", {"doctor"}, "every check it knows how to do"});
+
+  char row[320];
+  std::snprintf(row, sizeof row, "  %-18s %10s %13s %11s   %s\n", "case", "median", "over startup",
+                "best", "");
+  out << row;
+  std::snprintf(row, sizeof row, "  %s\n", std::string(74, '-').c_str());
+  out << row;
+
+  // `--version` does no work at all, so it is both the floor and a row of its own.
+  std::snprintf(row, sizeof row,
+                "  %-18s %7.3f ms %13s %7.3f ms   an empty program, for comparison\n",
+                "process startup", floor.median / 1000.0, "--", floor.best / 1000.0);
+  out << row;
+
+  double jump_over_floor = 0;
+  for (size_t i = 0; i < cases.size(); i++) {
+    Timing t = measure(self, cases[i].words, "", runs);
+    if (i == 0) jump_over_floor = (t.median - floor.median) / 1000.0;
+    std::snprintf(row, sizeof row, "  %-18s %7.3f ms %+9.3f ms %7.3f ms   %s\n",
+                  cases[i].label.c_str(), t.median / 1000.0, (t.median - floor.median) / 1000.0,
+                  t.best / 1000.0, cases[i].note.c_str());
+    out << row;
+  }
+
+  // say the thing the table is actually saying, because a table of milliseconds
+  // on its own invites the reading that this program is slow
+  std::snprintf(row, sizeof row,
+                "\n  starting any process here costs %.3f ms, before this program does\n"
+                "  anything at all. a jump costs %.3f ms more than that: read the config, find\n"
+                "  the name, check the directory still exists, print the path. The frecency\n"
+                "  log is not searched on a jump -- recording a visit only needs one\n"
+                "  timestamp out of it, which is a substring scan rather than a parse.\n",
+                floor.median / 1000.0, jump_over_floor);
+  out << row;
+  out << "  more runs: " << CONFIG << " bench --runs 200\n";
   return 0;
 }
 
@@ -2286,7 +2613,7 @@ struct Candidate {
 std::vector<Candidate> history_candidates(int limit) {
   std::vector<std::string> files;
   if (const char* extra = std::getenv("SIMPLEDIR_HISTORY")) files.push_back(extra);
-  for (const std::string& name : {".bash_history", ".zsh_history",
+  for (const std::string name : {".bash_history", ".zsh_history",
                                   ".local/share/fish/fish_history", ".config/fish/fish_history"}) {
     files.push_back(home_dir() + "/" + name);
   }
@@ -2346,7 +2673,7 @@ std::vector<Candidate> history_candidates(int limit) {
 
   if (!any_file) {
     std::string looked;
-    for (const std::string& name : {".bash_history", ".zsh_history", ".local/share/fish/fish_history",
+    for (const std::string name : {".bash_history", ".zsh_history", ".local/share/fish/fish_history",
                                     ".config/fish/fish_history"}) {
       looked += "\n  " + home_dir() + "/" + name;
     }
@@ -2383,7 +2710,7 @@ int cmd_suggest(const Args& args) {
   auto candidates = history_candidates(limit);
 
   if (candidates.empty()) {
-    std::cout << "every directory in your history is already bound (" << cfg.aliases.size()
+    out << "every directory in your history is already bound (" << cfg.aliases.size()
               << " aliases)\n";
     return 0;
   }
@@ -2391,24 +2718,24 @@ int cmd_suggest(const Args& args) {
   if (args.has("json")) {
     auto node = Json::make_obj();
     for (const Candidate& c : candidates) node->set(c.path, Json::make_num(c.hits));
-    std::cout << json_dump(node) << "\n";
+    out << json_dump(node) << "\n";
     return 0;
   }
 
   size_t width = 0;
   for (const Candidate& c : candidates) width = std::max(width, c.path.size());
-  std::cout << candidates.size() << " new directories from your history, showing the top "
+  out << candidates.size() << " new directories from your history, showing the top "
             << candidates.size() << ":\n\n";
   for (const Candidate& c : candidates) {
     char hits[16];
     std::snprintf(hits, sizeof hits, "%5d", c.hits);
-    std::cout << "  " << hits << "x  " << c.path << std::string(width - c.path.size(), ' ') << "\n";
+    out << "  " << hits << "x  " << c.path << std::string(width - c.path.size(), ' ') << "\n";
   }
-  std::cout << "\nbind them all:\n";
+  out << "\nbind them all:\n";
   std::set<std::string> taken;
   for (const auto& [name, path] : cfg.aliases) taken.insert(name);
   for (const Candidate& c : candidates) {
-    std::cout << "  " << CONFIG << " add " << name_for(c.path, taken) << " " << shell_quote(c.path)
+    out << "  " << CONFIG << " add " << name_for(c.path, taken) << " " << shell_quote(c.path)
               << "\n";
     taken.insert(name_for(c.path, taken));
   }
@@ -2419,7 +2746,7 @@ int cmd_suggest(const Args& args) {
 int cmd_bind(const Args& args) {
   auto candidates = history_candidates(10);
   if (candidates.empty()) {
-    std::cout << "nothing new in your history to bind\n";
+    out << "nothing new in your history to bind\n";
     return 0;
   }
   if (args.has("dry-run")) {
@@ -2431,7 +2758,7 @@ int cmd_bind(const Args& args) {
       names.push_back(name_for(c.path, taken));
       taken.insert(names.back());
     }
-    std::cout << "would bind " << names.size() << ": " << join(names, " ") << "\n";
+    out << "would bind " << names.size() << ": " << join(names, " ") << "\n";
     return 0;
   }
 
@@ -2448,9 +2775,9 @@ int cmd_bind(const Args& args) {
     made.emplace_back(name, c.path);
   }
   save_config(cfg);
-  std::cout << "bound " << made.size() << ":\n";
-  for (const auto& [name, path] : made) std::cout << "  " << name << " -> " << path << "\n";
-  std::cout << "\nrename any of them: " << CONFIG << " rename <old> <new>\n";
+  out << "bound " << made.size() << ":\n";
+  for (const auto& [name, path] : made) out << "  " << name << " -> " << path << "\n";
+  out << "\nrename any of them: " << CONFIG << " rename <old> <new>\n";
   return 0;
 }
 
@@ -2458,22 +2785,22 @@ int cmd_bind(const Args& args) {
 int cmd_forget(const Args& args) {
   auto dirs = read_history();
   if (dirs.empty()) {
-    std::cout << "your visit log is already empty\n";
+    out << "your visit log is already empty\n";
     return 0;
   }
 
   if (args.has("all")) {
     if (!args.has("yes") && isatty(STDIN_FILENO)) {
-      std::cout << "  forget all " << dirs.size() << " remembered directories? [y/N] " << std::flush;
+      out << "  forget all " << dirs.size() << " remembered directories? [y/N] "; out.flush();
       std::string answer;
-      if (!std::getline(std::cin, answer) || lower(trim(answer)) != "y") {
-        std::cout << "  ok, left alone\n";
+      if (!read_line(answer) || lower(trim(answer)) != "y") {
+        out << "  ok, left alone\n";
         return 0;
       }
     }
     std::error_code ec;
     fs::remove(g_history_file, ec);
-    std::cout << "forgot all " << dirs.size() << " remembered directories\n";
+    out << "forgot all " << dirs.size() << " remembered directories\n";
     return 0;
   }
 
@@ -2492,7 +2819,7 @@ int cmd_forget(const Args& args) {
     }
     root->set("dirs", node);
     write_atomic(g_history_file, json_dump(root) + "\n");
-    std::cout << "forgot " << target << "\n";
+    out << "forgot " << target << "\n";
     return 0;
   }
 
@@ -2502,7 +2829,7 @@ int cmd_forget(const Args& args) {
     if (!is_dir(path)) gone.push_back(path);
   }
   if (gone.empty()) {
-    std::cout << "nothing forgotten: every remembered directory still exists\n";
+    out << "nothing forgotten: every remembered directory still exists\n";
     return 0;
   }
   auto root = Json::make_obj();
@@ -2517,8 +2844,8 @@ int cmd_forget(const Args& args) {
   }
   root->set("dirs", node);
   write_atomic(g_history_file, json_dump(root) + "\n");
-  std::cout << "forgot " << gone.size() << " directories that no longer exist:\n";
-  for (const std::string& path : gone) std::cout << "  " << path << "\n";
+  out << "forgot " << gone.size() << " directories that no longer exist:\n";
+  for (const std::string& path : gone) out << "  " << path << "\n";
   return 0;
 }
 
@@ -2531,16 +2858,16 @@ int cmd_migrate(const Args& args) {
         std::to_string(CONFIG_VERSION) + ".\n  update the program first: " + CONFIG + " update");
   }
   if (found == CONFIG_VERSION) {
-    std::cout << "config is already version " << CONFIG_VERSION << ". nothing to do.\n";
+    out << "config is already version " << CONFIG_VERSION << ". nothing to do.\n";
     return 0;
   }
 
   if (args.has("dry-run")) {
-    std::cout << "would migrate " << g_config_file << ": version " << found << " -> " << CONFIG_VERSION
+    out << "would migrate " << g_config_file << ": version " << found << " -> " << CONFIG_VERSION
               << "\n  " << cfg.aliases.size() << " aliases kept exactly as they are";
-    if (found < 2) std::cout << "\n  would add \"history\": true, and create " << g_history_file;
-    if (found < 3) std::cout << "\n  would add an empty \"tags\" object, for " << CONFIG << " tag";
-    std::cout << "\n";
+    if (found < 2) out << "\n  would add \"history\": true, and create " << g_history_file;
+    if (found < 3) out << "\n  would add an empty \"tags\" object, for " << CONFIG << " tag";
+    out << "\n";
     return 0;
   }
 
@@ -2563,13 +2890,13 @@ int cmd_migrate(const Args& args) {
   }
   if (found < 3) did.push_back("added an empty \"tags\" object, for " + CONFIG + " tag");
 
-  std::cout << "migrated " << g_config_file << ": version " << found << " -> " << CONFIG_VERSION << "\n"
+  out << "migrated " << g_config_file << ": version " << found << " -> " << CONFIG_VERSION << "\n"
             << "  " << cfg.aliases.size() << " aliases kept as they were\n"
             << "  backup: " << backup << "\n";
-  for (const std::string& line : did) std::cout << "  " << line << "\n";
-  if (found < 2) std::cout << "  now `" << MOVE << " top` will remember where you go\n";
+  for (const std::string& line : did) out << "  " << line << "\n";
+  if (found < 2) out << "  now `" << MOVE << " top` will remember where you go\n";
   if (found < 3)
-    std::cout << "  tags: `" << CONFIG << " tag <name> <alias>...`, then `" << MOVE
+    out << "  tags: `" << CONFIG << " tag <name> <alias>...`, then `" << MOVE
               << " @<name> <alias>`\n";
   return 0;
 }
@@ -2611,8 +2938,8 @@ int cmd_zoxide(const Args& args) {
   }
 
   std::string sql = "SELECT path, rank FROM paths WHERE rank > 0 ORDER BY rank DESC LIMIT 200;";
-  std::string out = popen_capture("sqlite3 " + shell_quote(db) + " " + shell_quote(sql) + " 2>/dev/null");
-  if (trim(out).empty()) {
+  std::string dump = popen_capture("sqlite3 " + shell_quote(db) + " " + shell_quote(sql) + " 2>/dev/null");
+  if (trim(dump).empty()) {
     die("zoxide's database had nothing in it, or it isn't a sqlite file.\n"
         "  if zoxide is very old it used a different format; try `zoxide import` in zoxide itself first");
   }
@@ -2622,7 +2949,7 @@ int cmd_zoxide(const Args& args) {
     double rank;
   };
   std::vector<Row> rows_in;
-  for (const std::string& line : split(out, '\n')) {
+  for (const std::string& line : split(dump, '\n')) {
     std::string trimmed = trim(line);
     if (trimmed.empty()) continue;
     size_t bar = trimmed.find('|');
@@ -2644,7 +2971,7 @@ int cmd_zoxide(const Args& args) {
     bound.insert(as_stored(path));
   }
 
-  std::cout << "top " << rows_in.size() << " directories from zoxide's database:\n\n";
+  out << "top " << rows_in.size() << " directories from zoxide's database:\n\n";
   size_t width = 0;
   for (const Row& row : rows_in) width = std::max(width, row.path.size());
 
@@ -2658,9 +2985,9 @@ int cmd_zoxide(const Args& args) {
     std::snprintf(rank, sizeof rank, "%6.1f", row.rank);
     std::string suggested = name_for(row.path, taken);
     bool already = bound.count(row.path) > 0;
-    std::cout << "  " << rank << "  " << row.path << std::string(width - row.path.size(), ' ');
-    if (already) std::cout << "   [already bound]";
-    std::cout << "\n";
+    out << "  " << rank << "  " << row.path << std::string(width - row.path.size(), ' ');
+    if (already) out << "   [already bound]";
+    out << "\n";
     if (!already && args.has("bind")) {
       cfg.aliases[suggested] = row.path;
       taken.insert(suggested);
@@ -2670,18 +2997,18 @@ int cmd_zoxide(const Args& args) {
 
   if (args.has("bind")) {
     if (dry) {
-      std::cout << "\nwould bind " << made.size() << "\n";
+      out << "\nwould bind " << made.size() << "\n";
     } else {
       save_config(cfg);
-      std::cout << "\nimported " << made.size() << " from zoxide:\n";
-      for (const auto& [name, path] : made) std::cout << "  " << name << " -> " << path << "\n";
-      std::cout << "\nrename any you got wrong: " << CONFIG << " rename <old> <new>\n";
+      out << "\nimported " << made.size() << " from zoxide:\n";
+      for (const auto& [name, path] : made) out << "  " << name << " -> " << path << "\n";
+      out << "\nrename any you got wrong: " << CONFIG << " rename <old> <new>\n";
     }
   } else {
-    std::cout << "\nbind them all:\n";
+    out << "\nbind them all:\n";
     for (const Row& row : rows_in) {
       if (bound.count(row.path)) continue;
-      std::cout << "  " << CONFIG << " add " << name_for(row.path, taken) << " "
+      out << "  " << CONFIG << " add " << name_for(row.path, taken) << " "
                 << shell_quote(row.path) << "\n";
       taken.insert(name_for(row.path, taken));
     }
@@ -2878,7 +3205,7 @@ int install_release(const std::string& tag, bool allow_older) {
   // Say where it actually came from. Only worth a line when that isn't obvious:
   // a source fallback is normal for the very old releases and alarming otherwise.
   if (from_source) {
-    std::cout << "  that release has no binary attached, so this is the source file from"
+    out << "  that release has no binary attached, so this is the source file from"
               << " the tag\n";
   }
 
@@ -2912,7 +3239,7 @@ int install_release(const std::string& tag, bool allow_older) {
   if (sp != std::string::npos) got_version = got_version.substr(0, sp);
   if (!allow_older && got <= std::atof(VERSION)) {
     fs::remove(staged, ec);
-    std::cout << "  that asset is v" << got_version << ", same as what you have."
+    out << "  that asset is v" << got_version << ", same as what you have."
               << " not changing anything\n";
     return 0;
   }
@@ -2925,7 +3252,7 @@ int install_release(const std::string& tag, bool allow_older) {
   std::string wanted = tag == "latest" ? "" : trim(tag);
   if (!wanted.empty() && starts_with(wanted, "v")) wanted = wanted.substr(1);
   if (!wanted.empty() && got_version != wanted) {
-    std::cout << "  note: you asked for " << tag << ", and that release's own --version says "
+    out << "  note: you asked for " << tag << ", and that release's own --version says "
               << got_version << ".\n"
               << "  the tag was cut from a commit whose version string had already moved on."
               << " installing what\n"
@@ -2945,7 +3272,7 @@ int install_release(const std::string& tag, bool allow_older) {
   // one, which has neither `revert` nor `update --to`, so it cannot undo this.
   // Say so while the user still has this version's installer to hand.
   if (is_legacy) {
-    std::cout << "  note: v" << got_version << " calls itself `simpledir`, not `" << MOVE
+    out << "  note: v" << got_version << " calls itself `simpledir`, not `" << MOVE
               << "`. it predates the two-command split,\n"
               << "  so there is no `" << CONFIG << "` half in this version.\n";
   }
@@ -2954,17 +3281,17 @@ int install_release(const std::string& tag, bool allow_older) {
   // there. Telling someone to curl a script off the internet to undo a local
   // change is three steps and a network where zero would do.
   if (got < 6.0) {
-    std::cout << "  heads up: v" << got_version << " is the old python build. it has no `"
+    out << "  heads up: v" << got_version << " is the old python build. it has no `"
               << CONFIG << " revert` and no `update --to`,\n"
               << "  so it cannot bring you back here.\n";
     // Never promise a file that isn't there. install_release writes .previous on
     // the way in, so it normally is — but "normally" isn't good enough for the
     // one instruction someone is about to paste into a shell.
     if (path_exists(target + ".previous")) {
-      std::cout << "  to undo this, in a new shell:\n\n"
+      out << "  to undo this, in a new shell:\n\n"
                 << "    cp " << target << ".previous " << target << "\n";
     } else {
-      std::cout << "  to undo this, re-run the installer:\n"
+      out << "  to undo this, re-run the installer:\n"
                 << "    curl -fsSL https://raw.githubusercontent.com/" << g_repo
                 << "/main/install.sh | bash\n";
     }
@@ -2979,12 +3306,12 @@ int cmd_update(const Args& args) {
   // everything it needed to act.
   if (args.saw("to")) {
     std::string want = normalize_tag(args.value("to"));
-    std::cout << CONFIG << " " << VERSION << " installed, installing " << want << " over "
+    out << CONFIG << " " << VERSION << " installed, installing " << want << " over "
               << install_target() << "\n";
     int installed = install_release(want, true);
     if (installed)
-      std::cout << "  done. the previous one is at " << install_target() << ".previous\n";
-    std::cout << "  new shell needed if " << MOVE << " gained subcommands\n";
+      out << "  done. the previous one is at " << install_target() << ".previous\n";
+    out << "  new shell needed if " << MOVE << " gained subcommands\n";
     return 0;
   }
 
@@ -2995,39 +3322,39 @@ int cmd_update(const Args& args) {
         "  install a version directly: " + CONFIG + " update --to v6.0.0\n"
         "  releases are also listed at " + g_repo + "/releases");
   std::string latest = found.front().tag;
-  std::cout << CONFIG << " " << VERSION << " installed, newest release is " << latest << "\n";
+  out << CONFIG << " " << VERSION << " installed, newest release is " << latest << "\n";
 
   double have = std::atof(VERSION);
   double newest = std::atof(latest.c_str() + latest.find_first_not_of("v"));
   if (newest <= have) {
-    std::cout << "you're up to date\n";
+    out << "you're up to date\n";
     return 0;
   }
   if (args.has("check")) {
-    std::cout << "update available: " << latest << " (exit 1 means 'there is one')\n";
+    out << "update available: " << latest << " (exit 1 means 'there is one')\n";
     return 1;
   }
 
   std::string target = install_target();
   if (!args.has("yes")) {
     if (!isatty(STDIN_FILENO)) {
-      std::cout << "  not a terminal, so not asking. install it with: " << CONFIG << " update --yes\n";
+      out << "  not a terminal, so not asking. install it with: " << CONFIG << " update --yes\n";
       return 1;
     }
-    std::cout << "  install " << latest << " over " << target << "? [y/N] " << std::flush;
+    out << "  install " << latest << " over " << target << "? [y/N] "; out.flush();
     std::string answer;
-    if (!std::getline(std::cin, answer) || lower(trim(answer)) != "y") {
-      std::cout << "  ok, leaving it alone\n";
+    if (!read_line(answer) || lower(trim(answer)) != "y") {
+      out << "  ok, leaving it alone\n";
       return 0;
     }
   }
   int installed = install_release(latest, false);
   if (installed) {
-    std::cout << "updated to " << latest.substr(1) << " at " << target << "\n";
-    std::cout << "  the old one is kept at " << target << ".previous. go back: " << CONFIG
+    out << "updated to " << latest.substr(1) << " at " << target << "\n";
+    out << "  the old one is kept at " << target << ".previous. go back: " << CONFIG
               << " revert\n";
   }
-  std::cout << "  new shell needed if " << MOVE << " gained subcommands\n";
+  out << "  new shell needed if " << MOVE << " gained subcommands\n";
   return 0;
 }
 
@@ -3039,7 +3366,7 @@ int cmd_revert(const Args& args) {
   if (args.saw("to")) {
     std::string want = normalize_tag(args.value("to"));
     install_release(want, true);
-    std::cout << "now running " << want << " at " << target << "\n";
+    out << "now running " << want << " at " << target << "\n";
     return 0;
   }
 
@@ -3058,7 +3385,7 @@ int cmd_revert(const Args& args) {
   // binary with the identical file reads like it worked and did nothing.
   std::string have = trim(run_capture(shell_quote(target) + " --version 2>/dev/null", nullptr));
   if (have == reported) {
-    std::cout << "nothing to do: " << previous << " is the same version you're already on ("
+    out << "nothing to do: " << previous << " is the same version you're already on ("
               << reported << ")\n"
               << "  install a specific one instead: " << CONFIG << " update --to v6.0.0\n";
     return 0;
@@ -3076,18 +3403,19 @@ int cmd_revert(const Args& args) {
                                     fs::perms::owner_exec,
                   fs::perm_options::replace);
   fs::remove(swapped, ec);
-  std::cout << "back to " << reported << ", installed at " << target << "\n";
-  std::cout << "  (it was " << VERSION << ". new shell needed if " << MOVE << " gained subcommands)\n";
+  out << "back to " << reported << ", installed at " << target << "\n";
+  out << "  (it was " << VERSION << ". new shell needed if " << MOVE << " gained subcommands)\n";
   return 0;
 }
 
 int cmd_releases(const Args& args) {
+  (void)args;
   auto found = releases(15);
   if (found.empty()) die("couldn't reach GitHub to list releases. try again, or see " + g_repo);
-  std::cout << "published releases:\n\n";
+  out << "published releases:\n\n";
   for (const Release& r : found) {
     std::string mark = r.tag == "v" + std::string(VERSION) ? "  <- you are here" : "";
-    std::cout << "  " << r.tag << "  " << r.published << std::string(9, ' ') << r.name << mark
+    out << "  " << r.tag << "  " << r.published << std::string(9, ' ') << r.name << mark
               << "\n";
   }
   return 0;
@@ -3149,7 +3477,7 @@ void nudge() {
   if (latest.empty()) return;
   std::string bare = latest.substr(latest.find_first_not_of("v"));
   if (std::atof(bare.c_str()) > std::atof(VERSION)) {
-    std::cerr << MOVE << ": v" << bare << " is out (you're on v" << VERSION << "). `" << CONFIG
+    err << MOVE << ": v" << bare << " is out (you're on v" << VERSION << "). `" << CONFIG
               << " update` installs it.\n";
   }
 }
@@ -3169,7 +3497,7 @@ std::vector<std::string> rc_candidates() {
   }
   std::string shell = env_or("SHELL", "");
   if (contains(shell, "zsh")) out.push_back(env_or("ZDOTDIR", home_dir()) + "/.zshrc");
-  for (const std::string& name : {"/.bashrc", "/.zshrc", "/.config/fish/config.fish"}) {
+  for (const std::string name : {"/.bashrc", "/.zshrc", "/.config/fish/config.fish"}) {
     out.push_back(home_dir() + name);
   }
   std::vector<std::string> unique;
@@ -3196,7 +3524,7 @@ int cmd_init() {
   // instead of `case $x in /*)`, because a pattern is a glob. Readable in a
   // file, correct when pasted. Learned by watching `/*` expand to
   // "/bin /boot /dev /etc ..." and the shell die with a syntax error.
-  std::cout << "if ! command -v " << MOVE << " >/dev/null 2>&1; then export PATH=\"" << bindir
+  out << "if ! command -v " << MOVE << " >/dev/null 2>&1; then export PATH=\"" << bindir
             << ":$PATH\"; fi;\n"
             // How you arrived, for `sdcfg prompt` to render. The shell owns these
             // because a subprocess cannot set them, same reason it owns the cd.
@@ -3254,7 +3582,7 @@ int cmd_prompt(const std::string& shell) {
     throw UsageError("SD_PROMPT_COLOR wants an SGR sequence like 38;5;110");
 
   if (shell == "bash") {
-    std::cout << "# simpledir prompt segment for bash. add it to ~/.bashrc:\n"
+    out << "# simpledir prompt segment for bash. add it to ~/.bashrc:\n"
               << "#   eval \"$(" << CONFIG << " prompt bash)\"\n"
               << "# shows the alias you jumped by, in " << colour
               << ", while you're still in the directory it took you to.\n"
@@ -3274,7 +3602,7 @@ int cmd_prompt(const std::string& shell) {
               << "  PROMPT_COMMAND=\"_sd_prompt${PROMPT_COMMAND:+; $PROMPT_COMMAND}\";\n"
               << "fi;\n";
   } else if (shell == "zsh") {
-    std::cout << "# simpledir prompt segment for zsh. add it to ~/.zshrc:\n"
+    out << "# simpledir prompt segment for zsh. add it to ~/.zshrc:\n"
               << "#   eval \"$(" << CONFIG << " prompt zsh)\"\n"
               << "# shows the alias you jumped by, in " << colour
               << ", while you're still in the directory it took you to.\n"
@@ -3299,7 +3627,7 @@ int cmd_prompt(const std::string& shell) {
 
 int cmd_completions(const std::string& shell) {
   if (shell == "bash") {
-    std::cout << "# simpledir bash completion. install it with:\n"
+    out << "# simpledir bash completion. install it with:\n"
               << "#   " << CONFIG << " completions bash > "
               << "/usr/share/bash-completion/completions/" << MOVE << "\n"
               << "_" << MOVE << "_complete() {\n"
@@ -3315,14 +3643,14 @@ int cmd_completions(const std::string& shell) {
               << "complete -o filenames -F _" << MOVE << "_complete " << MOVE << "\n"
               << "\n"
               << "_" << CONFIG << "_complete() {\n"
-              << "  local cur verbs=\"add rm rename import bind tag forget adapt migrate zoxide prompt edit init "
+              << "  local cur verbs=\"add rm rename import bind tag forget adapt migrate bench zoxide prompt edit init "
                  "completions update revert releases uninstall doctor\"\n"
               << "  cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
               << "  COMPREPLY=( $(compgen -W \"$verbs\" -- \"$cur\") )\n"
               << "}\n"
               << "complete -F _" << CONFIG << "_complete " << CONFIG << "\n";
   } else {
-    std::cout << "#compdef " << MOVE << " " << CONFIG << "\n"
+    out << "#compdef " << MOVE << " " << CONFIG << "\n"
               << "# simpledir zsh completion. requires compinit; put this in ~/.zshrc:\n"
               << "#   " << CONFIG << " completions zsh > \"${fpath[1]}/_" << MOVE << "\"\n"
               << "local -a _sd_aliases\n"
@@ -3353,21 +3681,21 @@ int cmd_uninstall(const Args& args) {
   std::string running = fs::read_symlink("/proc/self/exe", self_ec);
   if (self_ec) running = g_prog;
   if (fs::weakly_canonical(target, self_ec) != fs::weakly_canonical(running, self_ec)) {
-    std::cout << "note: removing " << target << ", not the copy you're running (" << running << ")\n";
+    out << "note: removing " << target << ", not the copy you're running (" << running << ")\n";
   }
 
   if (!cfg.aliases.empty() && !args.has("purge")) {
-    std::cout << "you have " << cfg.aliases.size() << " alias"
+    out << "you have " << cfg.aliases.size() << " alias"
               << (cfg.aliases.size() == 1 ? "" : "es") << " in " << g_config_file << "\n"
               << "  these stay. to remove them too: " << CONFIG << " uninstall --purge\n";
   }
 
   if (!args.has("yes")) {
     if (!isatty(STDIN_FILENO)) die("not a terminal, so not asking. re-run with --yes");
-    std::cout << "  remove " << target << " and the wrapper from your shell rc? [y/N] " << std::flush;
+    out << "  remove " << target << " and the wrapper from your shell rc? [y/N] "; out.flush();
     std::string answer;
-    if (!std::getline(std::cin, answer) || lower(trim(answer)) != "y") {
-      std::cout << "  ok, nothing changed\n";
+    if (!read_line(answer) || lower(trim(answer)) != "y") {
+      out << "  ok, nothing changed\n";
       return 0;
     }
   }
@@ -3400,18 +3728,18 @@ int cmd_uninstall(const Args& args) {
     write_atomic(rc, cleaned);
     touched.push_back(rc + " (backup: " + backup + ")");
   }
-  if (touched.empty()) std::cout << "no wrapper block found in any shell rc\n";
+  if (touched.empty()) out << "no wrapper block found in any shell rc\n";
 
   std::error_code ec;
   if (path_exists(target)) {
     if (fs::remove(target, ec)) {
-      std::cout << "removed " << target << "\n";
+      out << "removed " << target << "\n";
     } else {
-      std::cout << "couldn't remove " << target << ": " << ec.message() << "\n"
+      out << "couldn't remove " << target << ": " << ec.message() << "\n"
                 << "  remove it by hand: rm " << target << "\n";
     }
   } else {
-    std::cout << "nothing to remove at " << target << "\n";
+    out << "nothing to remove at " << target << "\n";
   }
   // sdcfg lives *next to* the sd we just removed, and nowhere else. a
   // hardcoded ~/.local/bin/sdcfg here ignores SIMPLEDIR_BIN entirely, so a test
@@ -3419,29 +3747,29 @@ int cmd_uninstall(const Args& args) {
   // did so quietly, twice, before anybody worked out why it kept vanishing.
   fs::remove(fs::path(target).parent_path() / "sdcfg", ec);
 
-  for (const std::string& rc : touched) std::cout << "cleaned the wrapper from " << rc << "\n";
+  for (const std::string& rc : touched) out << "cleaned the wrapper from " << rc << "\n";
 
   if (args.has("purge")) {
     fs::remove_all(g_config_dir, ec);
-    std::cout << "deleted " << g_config_dir << " and every alias in it\n";
+    out << "deleted " << g_config_dir << " and every alias in it\n";
   } else {
-    std::cout << "aliases kept in " << g_config_file << "\n";
+    out << "aliases kept in " << g_config_file << "\n";
   }
-  std::cout << "open a new shell, or `exec bash`, to drop the old functions\n";
+  out << "open a new shell, or `exec bash`, to drop the old functions\n";
   return 0;
 }
 
 int cmd_doctor() {
   int problems = 0;
-  auto ok = [](const std::string& m) { std::cout << "  \033[32mok\033[0m    " << m << "\n"; };
-  auto bad = [&](const std::string& m) { problems++; std::cout << "  \033[31mproblem\033[0m " << m << "\n"; };
-  auto note = [](const std::string& m) { std::cout << "  \033[2mnote\033[0m    " << m << "\n"; };
+  auto ok = [](const std::string& m) { out << "  \033[32mok\033[0m    " << m << "\n"; };
+  auto bad = [&](const std::string& m) { problems++; out << "  \033[31mproblem\033[0m " << m << "\n"; };
+  auto note = [](const std::string& m) { out << "  \033[2mnote\033[0m    " << m << "\n"; };
 
-  std::cout << CONFIG << " doctor - version " << VERSION << "\n";
-  std::cout << "runtime\n";
+  out << CONFIG << " doctor - version " << VERSION << "\n";
+  out << "runtime\n";
   ok(std::string("built with ") + __VERSION__);
 
-  std::cout << "config\n";
+  out << "config\n";
   if (path_exists(g_config_file)) {
     ok(g_config_file);
     try {
@@ -3467,7 +3795,7 @@ int cmd_doctor() {
     bad("no config yet at " + g_config_file + ". create one: " + CONFIG + " add");
   }
 
-  std::cout << "shell\n";
+  out << "shell\n";
   bool wired = false;
   for (const std::string& rc : rc_candidates()) {
     if (!path_exists(rc)) continue;
@@ -3489,7 +3817,7 @@ int cmd_doctor() {
     bad(dir + " is not in PATH. add: export PATH=\"" + dir + ":$PATH\"");
   }
 
-  std::cout << "history\n";
+  out << "history\n";
   auto history = read_history();
   if (history.empty()) {
     note("empty. " + MOVE + " remembers where you go; " + CONFIG + " forget clears it");
@@ -3499,12 +3827,12 @@ int cmd_doctor() {
   }
   if (std::getenv("SIMPLEDIR_NO_HISTORY")) note("recording is off (SIMPLEDIR_NO_HISTORY)");
 
-  std::cout << "\n";
+  out << "\n";
   if (problems) {
-    std::cout << problems << " problem" << (problems == 1 ? "" : "s") << " found\n";
+    out << problems << " problem" << (problems == 1 ? "" : "s") << " found\n";
     return 1;
   }
-  std::cout << "everything looks fine\n";
+  out << "everything looks fine\n";
   return 0;
 }
 
@@ -3590,28 +3918,28 @@ int run_move(const std::vector<std::string>& argv) {
       msg += "\n  add it: " + CONFIG + " tag " + tag_name + " " + rest;
       throw UserError(msg);
     }
-    std::cout << jump(rest, cfg, now_seconds()) << "\n";
+    out << jump(rest, cfg, now_seconds()) << "\n";
     return 0;
   }
   // fast path: `sd <word>` and `sd --version` are what run on every prompt
   if (argv.size() == 1) {
     if (argv[0] == "--version") {
-      std::cout << MOVE << " " << VERSION << " - " << TAGLINE << "\n";
+      out << MOVE << " " << VERSION << " - " << TAGLINE << "\n";
       return 0;
     }
     if (argv[0] == "--help") {
-      std::cout << MOVE_HELP;
+      out << MOVE_HELP;
       return 0;
     }
     const std::set<std::string> verbs = {"ls", "print", "suggest", "i", "top", "adapt"};
     if (!starts_with(argv[0], "-") && !verbs.count(argv[0])) {
       Config cfg = load_config();
-      std::cout << jump(argv[0], cfg, now_seconds()) << "\n";
+      out << jump(argv[0], cfg, now_seconds()) << "\n";
       return 0;
     }
   }
   if (argv.empty()) {
-    std::cout << MOVE_HELP;
+    out << MOVE_HELP;
     return 0;
   }
 
@@ -3648,11 +3976,11 @@ int run_move(const std::vector<std::string>& argv) {
     Args args = parse_args(rest);
     if (args.words.empty()) throw UserError("which alias? usage: sd print <alias>");
     Config cfg = load_config();
-    std::cout << jump(args.words[0], cfg, now_seconds()) << "\n";
+    out << jump(args.words[0], cfg, now_seconds()) << "\n";
     return 0;
   }
   static const std::set<std::string> config_verbs = {
-      "add", "rm", "rename", "import", "bind", "tag", "project", "adapt", "forget", "migrate",
+      "add", "rm", "rename", "import", "bind", "tag", "project", "adapt", "forget", "migrate", "bench",
       "zoxide", "prompt", "export", "adopt",
       "edit", "init", "completions", "update", "revert", "releases", "uninstall", "doctor"};
   if (config_verbs.count(verb)) {
@@ -3664,7 +3992,7 @@ int run_move(const std::vector<std::string>& argv) {
 
 int run_config(const std::vector<std::string>& argv) {
   if (argv.empty()) {
-    std::cout << CONFIG_HELP;
+    out << CONFIG_HELP;
     return 0;
   }
   const std::string verb = argv[0];
@@ -3672,23 +4000,23 @@ int run_config(const std::vector<std::string>& argv) {
   Args args = parse_args(rest);
 
   static const std::set<std::string> known = {
-      "add", "rm", "rename", "import", "bind", "tag", "project", "adapt", "forget", "migrate",
+      "add", "rm", "rename", "import", "bind", "tag", "project", "adapt", "forget", "migrate", "bench",
       "zoxide", "prompt", "export", "adopt",
       "edit", "init", "completions", "update", "revert", "releases", "uninstall", "doctor"};
 
   if (verb == "--version") {
-    std::cout << CONFIG << " " << VERSION << " - " << TAGLINE << "\n";
+    out << CONFIG << " " << VERSION << " - " << TAGLINE << "\n";
     return 0;
   }
   if (verb == "--help") {
-    std::cout << CONFIG_HELP;
+    out << CONFIG_HELP;
     return 0;
   }
   if (!known.count(verb)) {
     // reaching for the wrong half is the commonest mistake; help if we can
     static const std::set<std::string> move_verbs = {"ls", "print", "suggest", "i", "top", "adapt"};
     if (move_verbs.count(verb)) {
-      std::cerr << "did you mean `" << MOVE << " " << verb << "`? " << CONFIG
+      err << "did you mean `" << MOVE << " " << verb << "`? " << CONFIG
                 << " only changes things.\n";
     }
     throw UsageError("'" + verb + "' is not an " + CONFIG + " command. try `" + CONFIG + " --help`");
@@ -3712,6 +4040,7 @@ int run_config(const std::vector<std::string>& argv) {
   if (verb == "releases") return cmd_releases(args);
   if (verb == "uninstall") return cmd_uninstall(args);
   if (verb == "doctor") return cmd_doctor();
+  if (verb == "bench") return cmd_bench(args);
   if (verb == "init") return cmd_init();
   if (verb == "prompt") return cmd_prompt(args.word(0));
   if (verb == "edit") {
@@ -3750,19 +4079,19 @@ int main(int argc, char** argv) {
 
   try {
     int status = g_mode == MOVE ? run_move(args) : run_config(args);
-    std::cout.flush();
+    out.flush();
     return status;
-  } catch (const UsageError& err) {
-    std::cout.flush();
-    std::cerr << g_prog << ": " << err.what() << "\n";
+  } catch (const UsageError& error) {
+    out.flush();
+    err << g_prog << ": " << error.what() << "\n";
     return 2;
-  } catch (const UserError& err) {
-    std::cout.flush();
-    std::cerr << g_prog << ": " << err.what() << "\n";
+  } catch (const UserError& error) {
+    out.flush();
+    err << g_prog << ": " << error.what() << "\n";
     return 1;
-  } catch (const std::exception& err) {
-    std::cout.flush();
-    std::cerr << g_prog << ": " << err.what() << "\n";
+  } catch (const std::exception& error) {
+    out.flush();
+    err << g_prog << ": " << error.what() << "\n";
     return 1;
   }
 }

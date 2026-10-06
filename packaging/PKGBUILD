@@ -1,7 +1,7 @@
 # Maintainer: NoxTheDev <https://github.com/noxthedevwindev-greatest>
 # Contributor: Your Name <you@example.com>
 pkgname=simpledir
-pkgver=6.0.0
+pkgver=10.0.0
 pkgrel=1
 pkgdesc="Named directory shortcuts for your shell - a frecency-aware zoxide alternative"
 arch=('x86_64' 'aarch64')
@@ -18,9 +18,13 @@ sha256sums=('SKIP')
 
 build() {
   cd "$srcdir/$pkgname"
-  # one source file, statically linked against libstdc++ so the binary doesn't
-  # care what your gcc version is
-  g++ -std=c++17 -O2 -static-libstdc++ -static-libgcc -o sd sd.cpp
+  # one source file. linked statically when this system has a static libc,
+  # because the dynamic loader costs more than the program does; falls back to
+  # static libstdc++ (no glibc-static in the runtime closure) if it doesn't.
+  if ! g++ -std=c++17 -O2 -static -ffunction-sections -fdata-sections \
+       -Wl,--gc-sections -o sd sd.cpp 2>/dev/null; then
+    g++ -std=c++17 -O2 -static-libstdc++ -static-libgcc -o sd sd.cpp
+  fi
 }
 
 check() {

@@ -8,7 +8,7 @@
 changes your directory. Both names are the same binary; the program decides
 which half it is by the name it was invoked as (`argv[0]`).
 
-Linux. MIT. Zero dependencies beyond libstdc++ and `curl`.
+Linux. MIT. Zero dependencies beyond `curl` — the binary is linked statically.
 
 ## Docs
 
@@ -20,7 +20,7 @@ Linux. MIT. Zero dependencies beyond libstdc++ and `curl`.
 ## Install
 
 ```
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v9.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v10.0.0/install.sh | bash
 ```
 
 The installer detects the platform, downloads a prebuilt `sd-linux-x86_64` or
@@ -207,6 +207,10 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ## Version history
 
+- 10.0.0 — linked fully static and with no iostreams, so a jump went from 1.44ms to
+  0.76ms and the only runtime dependency left is curl; the visit throttle now scans
+  history.json for a single timestamp instead of parsing the whole log; and `sdcfg
+  bench`, which forks the real binary and reports median time over process startup.
 - 9.0.0 — tags (`sdcfg tag @name <alias>...`, `sd @name`, `sd @name <alias>`,
   `sd ls @name`); per-project aliases in a `.simpledir.json` beside a project,
   stored relative so they travel, and the project's name wins inside the tree; and
@@ -268,7 +272,7 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ```
 make        # one g++ invocation over one file
-make test   # 397 assertions against the compiled binary, no network
+make test   # 565 assertions against the compiled binary, no network
 make assets # dist/ (the binary, sd.cpp, install.sh, mode 755)
 make release
 ```

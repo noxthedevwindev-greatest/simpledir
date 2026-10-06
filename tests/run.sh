@@ -459,6 +459,119 @@ EOF
 fr2 "$SD" print q >/dev/null
 check '"history": false stops the log'   0 bash -c "! test -e '$FR2/history.json'"
 
+# --- recording a visit: the throttle -----------------------------------------
+# A jump records where you went, but not once a minute per directory. v10 checks
+# that against the log as text rather than parsing it, because building a json
+# tree for 500 entries to look up one key was the most expensive thing this
+# program did. These assertions exist because that shortcut is easy to get subtly
+# wrong: a throttle that never fires loses frecency's decay, and one that always
+# fires freezes the log solid.
+THR=$(mktemp -d)
+mkdir -p "$THR/one" "$THR/two"
+th() { env SIMPLEDIR_CONFIG_DIR="$THR" "$@" ; }
+th "$CFG" add one "$THR/one" >/dev/null
+th "$CFG" add two "$THR/two" >/dev/null
+th "$SD" print one >/dev/null
+has "the first jump counts" '"n": 1' "$(cat "$THR/history.json")"
+
+for _ in 1 2 3 4 5; do th "$SD" print one >/dev/null; done
+check "a second jump inside the minute is throttled" 0 sh -c "! grep -q '\"n\": [2-9]' '$THR/history.json'"
+check "and the count really is still one"            0 grep -q '"n": 1' "$THR/history.json"
+
+th "$SD" print two >/dev/null
+check "a directory nobody has been to is still recorded" 0 python3 -c \
+  "import json,sys; d=json.load(open('$THR/history.json')); sys.exit(0 if '$THR/two' in d['dirs'] else 1)"
+
+# the log is a log, not a data format: anything hand-shaped must still throttle
+python3 - "$THR/history.json" <<'SEED'
+import json, sys, pathlib
+p = pathlib.Path(sys.argv[1])
+p.write_text(json.dumps(json.loads(p.read_text()), separators=(",", ":")))
+SEED
+for _ in 1 2 3; do th "$SD" print one >/dev/null; done
+check "a compact log still throttles" 0 sh -c "! grep -q '\"n\": [2-9]' '$THR/history.json'"
+
+python3 - "$THR/history.json" <<'SEED'
+import json, sys, pathlib, collections
+p = pathlib.Path(sys.argv[1])
+d = json.loads(p.read_text())
+# members in the other order, so "t" is not the first thing after the key
+out = {"version": 1,
+       "dirs": {k: collections.OrderedDict([("t", v["t"]), ("n", v["n"])])
+                for k, v in d["dirs"].items()}}
+p.write_text(json.dumps(out))
+SEED
+for _ in 1 2 3; do th "$SD" print one >/dev/null; done
+check "a reordered log still throttles" 0 sh -c "! grep -q '\"n\": [2-9]' '$THR/history.json'"
+
+# a path with a brace in it must not make the scan read a neighbour's timestamp
+mkdir -p "$THR/od}d"
+th "$CFG" add odd "$THR/od}d" >/dev/null
+th "$SD" print odd >/dev/null
+th "$SD" print odd >/dev/null
+check "a brace in the path throttles too" 0 python3 -c \
+  "import json,sys; d=json.load(open('$THR/history.json')); sys.exit(0 if d['dirs']['$THR/od}d']['n'] == 1 else 1)"
+
+# the throttle has to expire, or frecency stops decaying anything
+python3 - "$THR/history.json" "$THR/one" <<'SEED'
+import json, sys, time, pathlib
+p = pathlib.Path(sys.argv[1])
+d = json.loads(p.read_text())
+d["dirs"][sys.argv[2]] = {"n": 4, "t": int(time.time()) - 120}
+p.write_text(json.dumps(d))
+SEED
+th "$SD" print one >/dev/null
+check "an expired throttle records again" 0 grep -q '"n": 5' "$THR/history.json"
+
+# SIMPLEDIR_NO_HISTORY is a documented escape hatch and still means "write nothing"
+rm -f "$THR/history.json"
+th env SIMPLEDIR_NO_HISTORY=1 "$SD" print one >/dev/null
+check "SIMPLEDIR_NO_HISTORY writes nothing" 0 sh -c "! test -e '$THR/history.json'"
+
+# a log we cannot parse must never cost you the jump
+printf 'this is not json at all' > "$THR/history.json"
+check "a corrupt log still jumps"    0 sh -c "env SIMPLEDIR_CONFIG_DIR='$THR' '$SD' print one"
+check "and it is replaced, not kept"  0 sh -c "! grep -q 'not json' '$THR/history.json'"
+check "with a fresh one that works"   0 python3 -c \
+  "import json; d=json.load(open('$THR/history.json')); raise SystemExit(0 if d['dirs'] else 1)"
+# ...but only when recording is on, and the old file is not something to leave behind
+printf 'this is not json at all' > "$THR/history.json"
+th env SIMPLEDIR_NO_HISTORY=1 "$SD" print one >/dev/null
+check "with recording off it is left alone" 0 grep -q 'not json' "$THR/history.json"
+printf '{"version": 1, "dirs": {"x": "not an object"}}' > "$THR/history.json"
+check "an odd entry shape still jumps" 0 sh -c "env SIMPLEDIR_CONFIG_DIR='$THR' '$SD' print one"
+printf '' > "$THR/history.json"
+check "an empty log still jumps"      0 sh -c "env SIMPLEDIR_CONFIG_DIR='$THR' '$SD' print one"
+rm -rf "$THR"
+
+# --- sdcfg bench --------------------------------------------------------------
+# v10 is the release about being fast, so it ships the measuring stick. None of
+# these assert a timing -- a test that fails on a loaded machine teaches you to
+# ignore the whole suite. They check that it runs, that it forks the real binary,
+# and that it says something a person could act on.
+BN=$(mktemp -d); mkdir -p "$BN/one"
+env SIMPLEDIR_CONFIG_DIR="$BN" "$CFG" add one "$BN/one" >/dev/null
+out=$(env SIMPLEDIR_CONFIG_DIR="$BN" "$CFG" bench --runs 5 2>&1)
+check   "bench exits 0"                  0 env SIMPLEDIR_CONFIG_DIR="$BN" "$CFG" bench --runs 5
+contains "bench names itself"           "simpledir benchmark" "$out"
+contains "bench reports the version"    "$(env SIMPLEDIR_CONFIG_DIR="$BN" "$SD" --version | awk '{print $2}')" "$out"
+contains "bench times a jump"           "sd <alias>" "$out"
+contains "bench shows the startup floor" "process startup" "$out"
+has     "bench prints milliseconds"     "ms" "$out"
+contains "bench explains the floor"     "before this program" "$out"
+lacks   "bench promises nothing"        "guaranteed" "$out"
+check   "bench rejects a silly --runs"  2 env SIMPLEDIR_CONFIG_DIR="$BN" "$CFG" bench --runs 1
+contains "and says the range"           "5 to 2000" \
+  "$(env SIMPLEDIR_CONFIG_DIR="$BN" "$CFG" bench --runs 1 2>&1 || true)"
+check   "bench rejects a huge --runs"   2 env SIMPLEDIR_CONFIG_DIR="$BN" "$CFG" bench --runs 99999
+# a broken or absent config must not make the benchmark hang, crash, or vanish
+BN2=$(mktemp -d); printf 'not json' > "$BN2/config.json"
+check   "bench survives a broken config" 0 env SIMPLEDIR_CONFIG_DIR="$BN2" "$CFG" bench --runs 5
+check   "bench survives no config at all" 0 env SIMPLEDIR_CONFIG_DIR="$(mktemp -d)" "$CFG" bench --runs 5
+out=$(env SIMPLEDIR_CONFIG_DIR="$BN2" "$CFG" bench --runs 5 2>&1)
+has     "bench still times something with no aliases" "process startup" "$out"
+rm -rf "$BN" "$BN2"
+
 # --- tags: named groups of aliases -------------------------------------------
 # A tag is a group of *names*, not paths, so renaming or rebinding an alias
 # updates every tag that mentions it and `sd @work dots` can never disagree with

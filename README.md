@@ -90,13 +90,13 @@ you have no compiler. either way you get `sd` plus an `sdcfg` symlink in
 `~/.local/bin` and a wired-up shell rc.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v9.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v10.0.0/install.sh | bash
 ```
 
 prefer to look before you pipe? that's the right instinct:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v9.0.0/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v10.0.0/install.sh -o install.sh
 less install.sh && bash install.sh
 ```
 
@@ -274,6 +274,52 @@ want there anyway.
 tested on bash 5.2. the wrapper only uses portable constructs, so zsh should be
 fine, but that's untested — tell me if it breaks.
 
+## what's new in 10.0
+
+the fast release. nothing new to learn — same commands, measurably less waiting.
+
+**linked static.** the dynamic loader was costing ~650 microseconds before `main()`
+even started, which is more than this program spends doing its actual job. the binary
+now links everything statically, so `curl` is the only runtime dependency left — it
+used to be libstdc++ and curl.
+
+**no iostreams.** `std::ios_base::Init` builds the locale machinery before `main()`
+runs: ~90 microseconds, on a program whose entire job is printing one path. output is
+now two buffers and a `write(2)`, buffered exactly the way `std::cout` was — line
+buffered on a terminal, block buffered into a pipe, stderr unbuffered.
+
+**the throttle stopped parsing the log.** recording a visit is part of jumping, and
+all it needs is one timestamp out of `history.json`. so every single `cd` was building
+a json tree for up to 500 entries to look up one key. it is now a substring scan for
+the exact key, bounded by that entry's closing brace, falling back to a full parse
+whenever the file isn't shaped the way simpledir writes it — so a hand-edited log
+still behaves.
+
+measured on one laptop, median of 120 runs over 6 interleaved rounds:
+
+| build | per jump |
+| --- | --- |
+| 9.0.0 | 1.44 ms |
+| static | 0.83 ms |
+| static + section gc | 0.76 ms |
+
+**`sdcfg bench`** ships the measuring stick, so nobody has to take a table's word
+for it. it forks the real binary and reports median time *over process startup*,
+because without that baseline a millisecond figure means nothing:
+
+```
+  case                   median  over startup        best
+  --------------------------------------------------------------------------
+  process startup      0.269 ms            --   0.230 ms   an empty program, for comparison
+  sd <alias>           0.394 ms    +0.125 ms   0.331 ms   the common case: hit an alias
+```
+
+**no daemon.** the obvious way to make this fast is a resident process holding the
+model in memory, and it's the wrong answer: parsing the frecency log cost ~120us, a
+unix socket round trip costs about the same, and `sd name` never searched the log at
+all. static linking beat the daemon at every step. the measurements live in the
+`Makefile` so nobody re-attempts it.
+
 ## what's new in 9.0
 
 three things for getting at more than a dozen aliases without losing the plot.
@@ -330,7 +376,7 @@ sd: no alias named 'adapt'
 ```
 
 the binary was fine and `sdcfg adapt` was fine. only the wrapper's copy of the list
-was behind, which is why it survived 446 assertions — the tests called the binary
+was behind, which is why it survived 565 assertions — the tests called the binary
 directly.
 
 that list is a literal inside a generated string, so it's the easy thing to forget
@@ -393,7 +439,7 @@ copying.
 so the installer is pinned to its own tag now:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v9.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v10.0.0/install.sh | bash
 ```
 
 a tagged path never changes, so the cache is always correct for the version it
@@ -711,7 +757,7 @@ forward. `update --to` says so before it does it, and the way back is the
 installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v9.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v10.0.0/install.sh | bash
 ```
 
 it also checks on its own, at most **once a day**, and only when you're sitting
@@ -746,7 +792,7 @@ else with `SIMPLEDIR_BIN=/path/to/sd`.
 
 ```bash
 make                # build: one g++ invocation over one file
-make test           # 397 assertions, real bash subprocesses, no network
+make test           # 565 assertions, real bash subprocesses, no network
 make assets         # dist/ for a release: the binary, sd.cpp, install.sh
 make release        # tag, push, publish with assets attached
 vhs docs/demo.tape  # re-record the gif above (needs vhs + ttyd)

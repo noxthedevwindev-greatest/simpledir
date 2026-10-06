@@ -3,7 +3,7 @@
 # simpledir installer. finds a prebuilt binary for this box, or compiles one,
 # then installs sd + sdcfg and wires your shell rc.
 #
-#   curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v9.0.0/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v10.0.0/install.sh | bash
 #
 # options:
 #   --source        compile from source even if a binary exists
@@ -32,7 +32,7 @@ BASE="${SIMPLEDIR_BASE_URL:-https://github.com/$OWNER/$REPO}"
 # changes, so the cache is always right for the version it names.
 #
 # Keep this in step with VERSION in sd.cpp; a test checks that it is.
-SD_VERSION="9.0.0"
+SD_VERSION="10.0.0"
 RAW="${SIMPLEDIR_SOURCE_URL:-https://raw.githubusercontent.com/$OWNER/$REPO/v$SD_VERSION}"
 case "$RAW" in */) ;; *) RAW="$RAW/" ;; esac
 BIN_DIR="${SIMPLEDIR_BIN_DIR:-$HOME/.local/bin}"
@@ -232,9 +232,18 @@ obtain() {
     install_toolchain
     info "compiling from source (one file, this takes a few seconds)"
     fetch "$RAW/sd.cpp" "$work/sd.cpp" || { rm -rf "$work"; die "couldn't download sd.cpp from $RAW"; }
-    if ! "$(compiler)" -std=c++17 -O2 -static-libstdc++ -static-libgcc -o "$work/sd" "$work/sd.cpp"; then
-      rm -rf "$work"
-      die "compilation failed. sd.cpp is one file; the full error is above."
+    # static first, same as the Makefile: the dynamic loader costs more than the
+    # program does, and gc-sections drops 800KB of unreferenced libc. A toolchain
+    # without a static libc still gets a working binary, just a slower one.
+    cxx=$(compiler)
+    if ! "$cxx" -std=c++17 -O2 -static -ffunction-sections -fdata-sections \
+         -Wl,--gc-sections -o "$work/sd" "$work/sd.cpp" 2>/dev/null; then
+      warn "no static libc here, linking dynamically (slightly slower startup)"
+      if ! "$cxx" -std=c++17 -O2 -static-libstdc++ -static-libgcc \
+           -o "$work/sd" "$work/sd.cpp"; then
+        rm -rf "$work"
+        die "compilation failed. sd.cpp is one file; the full error is above."
+      fi
     fi
     "$work/sd" --version >/dev/null || { rm -rf "$work"; die "the build didn't produce a working binary"; }
     info "built $("$work/sd" --version)"

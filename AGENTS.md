@@ -26,8 +26,8 @@ you. keep it that way — the split is the whole ergonomic argument, and it mean
    reason the tool has two dependencies and works on a plane.
 1. **one source file on purpose.** `sd.cpp` is the entire program. resist
    splitting it, adding a build system beyond the one line in the Makefile, or
-   pulling in a JSON or CLI library. libstdc++ and curl are the whole dependency
-   list.
+   pulling in a JSON or CLI library. the binary links statically, so curl is the
+   whole dependency list — libstdc++ is inside it.
 2. **the shell does the `cd`.** a subprocess cannot change the calling shell's
    cwd. `sd print` writes a path to stdout; the function emitted by `sdcfg init`
    performs the `cd`. never make a subcommand try to `cd`. only `sd` needs the
@@ -93,13 +93,41 @@ you. keep it that way — the split is the whole ergonomic argument, and it mean
     that exists. `HOME` in a test must point somewhere empty or the developer's
     real history leaks into the counts.
 
+17. **don't put iostream back.** `<iostream>` drags in `std::ios_base::Init`, whose
+    static constructor builds the locale machinery before `main()` runs: ~90us, which
+    was a quarter of this program's own work. output goes through the two `Out`
+    objects and nothing else — `out` on fd 1, `err` on fd 2. watch the shadowing, because
+    several string-building functions wanted the name `out` and had to be renamed.
+    buffering has to stay faithful: line buffered on a tty, block buffered into a pipe,
+    stderr unbuffered, or `sd ls | head` and the error messages change behaviour.
+
+18. **the visit throttle scans, it doesn't parse.** `record_visit()` runs on every
+    single `cd`, so it finds its one timestamp in `history.json` with
+    `scanned_visit_time()` — a substring search for the exact json-escaped key, bounded by
+    that entry's closing brace. that bound is not decoration: a path containing `}`
+    puts a brace inside the key, and without the bound the scan would read a
+    neighbour's timestamp. it falls back to a full parse whenever the scan comes up
+    empty, because "not found by scan" cannot be told apart from "this file isn't
+    shaped the way we write it". don't replace it with a plain parse — building a json
+    tree for 500 entries to look up one key was the single most expensive thing the
+    program did, and `sd <alias>` was slower than `sd ls` because of it.
+
+19. **don't add a daemon.** a resident process holding the frecency model in memory is
+    the obvious answer to "make it fast" and it is measurably the wrong one: parsing
+    the log cost ~120us, a unix socket round trip costs about the same, and
+    `sd <alias>` never searched the log at all. the real cost was pre-`main` work — the
+    dynamic loader (~650us) and iostream's static init (~90us), both of which static
+    linking removes. the numbers are in the `Makefile` and `sdcfg bench` reproduces
+    them on demand. measure before believing anything here; the machine's noise floor
+    is larger than most of the wins being argued about.
+
 ## before you touch anything
 
 ```bash
-make test     # 397 assertions, spawns real bash to verify the wrapper
+make test     # 565 assertions, spawns real bash to verify the wrapper
 ```
 
-it must be 397/397 (or more) before you commit. the suite drives the *compiled*
+it must be 565/565 (or more) before you commit. the suite drives the *compiled*
 binary through the same command-line surface a user does, and it covers the
 python-era behaviours too: the `cd` the wrapper actually performs, `install.sh`
 (platform refusal, asset download, compile fallback, install/uninstall round
@@ -131,7 +159,9 @@ when stdin isn't a terminal.
   name the command that fixes it (`sd ls`, `sdcfg add --force ...`).
 - paths: expand `~` and `$VARS`, then resolve. do this once at `add` time. on
   read use `as_stored()`, never `realpath()` — see rule 11.
-- stdlib only. no runtime dependency beyond libstdc++ and curl.
+- stdlib only. no runtime dependency beyond curl, because the binary is linked
+  statically. a toolchain with no static libc falls back to shared libstdc++ and
+  says so during the build.
 - when you add a verb: the `COMMANDS` set in the shell wrapper's `case`, the
   dispatch in `run_move`/`run_config`, and a test.
 - tests: add an assertion to `tests/run.sh` for every behaviour change. use the
