@@ -46,7 +46,7 @@
 namespace fs = std::filesystem;
 
 #ifndef VERSION
-#define VERSION "8.0.0"
+#define VERSION "8.0.1"
 #endif
 
 // The one line this release is about, shown by `--version`. A number on its own
@@ -54,7 +54,7 @@ namespace fs = std::filesystem;
 // test suite builds stub binaries with -DVERSION, and a TAGLINE that only exists
 // when VERSION does not would leave those stubs uncompilable.
 #ifndef TAGLINE
-#define TAGLINE "it learns which of your directories deserve names"
+#define TAGLINE "the wrapper forwards every read-only verb"
 #endif
 
 #define CONFIG_VERSION 2
@@ -2564,8 +2564,13 @@ int cmd_init() {
             << "  return 0;\n"
             << "};\n"
             << MOVE << "() {\n"
+            // Every read-only verb has to be listed here. It is a literal in the
+            // generated block, so adding a verb and forgetting this is the easy
+            // mistake, and the symptom is `sd adapt` reporting "no alias named
+            // 'adapt'". A test derives the list from the help text.
             << "  if [ \"${1-}\" = \"ls\" ] || [ \"${1-}\" = \"i\" ] || [ \"${1-}\" = \"print\" ]"
-               " || [ \"${1-}\" = \"top\" ] || [ \"${1-}\" = \"suggest\" ] || "
+               " || [ \"${1-}\" = \"top\" ] || [ \"${1-}\" = \"suggest\" ]"
+               " || [ \"${1-}\" = \"adapt\" ] || "
                "([ \"${1:0:1}\" = \"-\" ] && [ \"${1-}\" != \"-\" ]); then\n"
             << "    command " << MOVE << " \"$@\";\n"
             << "    return $?;\n"

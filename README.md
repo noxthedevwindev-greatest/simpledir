@@ -90,13 +90,13 @@ you have no compiler. either way you get `sd` plus an `sdcfg` symlink in
 `~/.local/bin` and a wired-up shell rc.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v8.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v8.0.1/install.sh | bash
 ```
 
 prefer to look before you pipe? that's the right instinct:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v8.0.0/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v8.0.1/install.sh -o install.sh
 less install.sh && bash install.sh
 ```
 
@@ -274,6 +274,24 @@ want there anyway.
 tested on bash 5.2. the wrapper only uses portable constructs, so zsh should be
 fine, but that's untested — tell me if it breaks.
 
+## what's new in 8.0.1
+
+`sd adapt` didn't work. the shell wrapper has a literal list of the read-only verbs
+it forwards, and `adapt` wasn't in it, so the wrapper treated it as an alias name:
+
+```
+$ sd adapt
+sd: no alias named 'adapt'
+```
+
+the binary was fine and `sdcfg adapt` was fine. only the wrapper's copy of the list
+was behind, which is why it survived 446 assertions — the tests called the binary
+directly.
+
+that list is a literal inside a generated string, so it's the easy thing to forget
+when adding a verb. the test now derives the verbs from the help text and asserts
+the wrapper forwards every one of them, so the next verb can't have this problem.
+
 ## what's new in 8.0
 
 **it asks which of your directories deserve names, and remembers your answer.**
@@ -330,7 +348,7 @@ copying.
 so the installer is pinned to its own tag now:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v8.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v8.0.1/install.sh | bash
 ```
 
 a tagged path never changes, so the cache is always correct for the version it
@@ -648,7 +666,7 @@ forward. `update --to` says so before it does it, and the way back is the
 installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v8.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v8.0.1/install.sh | bash
 ```
 
 it also checks on its own, at most **once a day**, and only when you're sitting

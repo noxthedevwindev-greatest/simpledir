@@ -1259,6 +1259,16 @@ check "sd jumps into a suffix" 0 bash --noprofile --norc -c "
 check "sd takes a raw path"    0 bash --noprofile --norc -c "
   source '$wrapper'; cd /; sd '$SIMPLEDIR_CONFIG_DIR/tree'; [[ \$PWD == '$SIMPLEDIR_CONFIG_DIR/tree' ]]"
 
+# Every read-only verb must be forwarded by the wrapper, and the list is a literal
+# in the generated block, so adding a verb without adding it there is easy. Derive
+# the list from the help text instead of hardcoding it in the test.
+read_only=$(sed -n '/^usage: sd </,/^$/p' "$ROOT/sd.cpp" 2>/dev/null | sed -n 's/^  sd \([a-z]*\) .*/\1/p')
+for verb in $read_only; do
+  lacks "the wrapper forwards \`$verb\`" "no alias named '$verb'" bash --noprofile --norc -c "
+    source '$wrapper'; command sd $verb 2>&1 || true"
+done
+contains "adapt is in the forwarded list" 'adapt"' "$CFG" init
+
 # the read-only verbs must reach the binary and NOT change directory
 check "sd ls does not cd"      0 bash --noprofile --norc -c "
   source '$wrapper'; cd /tmp; sd ls >/dev/null; [[ \$PWD == /tmp ]]"
