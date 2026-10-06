@@ -4,7 +4,16 @@ OWNER  ?= noxthedevwindev-greatest
 REPO   ?= simpledir
 ARCH   ?= $(shell uname -m | sed -e 's/x86_64/x86_64/' -e 's/aarch64/arm64/')
 ASSET  ?= sd-linux-$(ARCH)
-ASSETS ?= $(ASSET) sd.cpp install.sh
+# What gets hashed. The sums file is NOT in here -- `sha256sum ... SHA256SUMS >
+# SHA256SUMS` reads the old file while truncating it and writes a line that is
+# wrong by construction. That bug shipped for one release; the test that checks
+# `sha256sum -c SHA256SUMS` in dist/ is what caught it.
+HASHED  ?= $(ASSET) sd.cpp install.sh
+# What gets uploaded. Both.
+ASSETS ?= $(HASHED) $(SUMS)
+# shipped alongside them. SHA256SUMS is what lets anyone -- and the installer
+# itself -- tell "the bytes we published" from "whatever arrived over the wire".
+SUMS ?= SHA256SUMS
 
 CXXFLAGS ?= -std=c++17 -O2
 
@@ -91,8 +100,14 @@ assets: sd
 	install -m 755 sd "dist/$(ASSET)"
 	install -m 755 sd.cpp dist/sd.cpp
 	install -m 755 install.sh dist/install.sh
+	@# generated from inside dist/ so the names in it are the bare filenames a
+	@# user sees in the downloads list. `cd && &&` is the portable form; a
+	@# subshell keeps it from leaking into the caller's directory.
+	@(cd dist && sha256sum $(HASHED) > $(SUMS))
 	@ls -l dist
 	@./sd --version
+	@echo "--- $(SUMS) ---"
+	@cat dist/$(SUMS)
 
 release: test audit-tags assets
 	@version=$$(sed -n 's/^#define VERSION "\(.*\)"/\1/p' sd.cpp); \

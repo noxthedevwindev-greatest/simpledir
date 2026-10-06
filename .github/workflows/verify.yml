@@ -1,0 +1,77 @@
+# Runs the real suite against the real compiled binary on every push, and refuses
+# a tag whose commit disagrees with its own version string.
+#
+# The point is not that CI is greener than my laptop. The point is that the two
+# claims this repo makes -- "565 assertions pass" and "every published tag names
+# the version inside it" -- are checked by something that isn't a person
+# remembering to check them. v1.0.0 shipped four releases with a tag pointing one
+# commit late, and every test stubbed the thing that would have noticed.
+name: verify
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: build
+        run: make
+
+      # The suite spawns real bash, exercises install.sh against file:// stubs and
+      # builds its own stub binaries with g++, so a compiler has to be present.
+      # Nothing here touches the network: the update path is pointed at file://.
+      - name: test
+        run: make test
+
+      - name: every tag matches its commit
+        run: make audit-tags
+
+      - name: version and tagline are real
+        run: make check
+
+      # Cheap and worth knowing: a static binary that grew 4x is a dependency
+      # arriving by accident, and this repo has exactly one source file.
+      - name: source is still one file
+        run: |
+          lines=$(wc -l < sd.cpp)
+          echo "sd.cpp is $lines lines"
+          [ "$lines" -lt 5000 ] || { echo "sd.cpp got big; is it still one file?"; exit 1; }
+
+  # Prove the released asset is the thing the source builds. Not bit-identical --
+  # different compilers and libc give different bytes -- but it must be static,
+  # must report the version the tag claims, and must actually jump.
+  release-asset:
+    runs-on: ubuntu-latest
+    needs: suite
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: build the same way make assets does
+        run: make
+
+      - name: it is statically linked
+        run: |
+          file sd | grep -q 'statically linked' || {
+            echo "the released binary is not static; curl is the only dep claim depends on this"
+            exit 1
+          }
+
+      - name: it reports the tag's version
+        run: |
+          tagged=${GITHUB_REF_NAME#v}
+          got=$(./sd --version | awk '{print $2}')
+          echo "tag says $tagged, binary says $got"
+          [ "$tagged" = "$got" ]
+
+      - name: it jumps
+        run: |
+          mkdir -p "$RUNNER_TEMP/target"
+          ./sdcfg add smoke "$RUNNER_TEMP/target"
+          test "$(./sd print smoke)" = "$RUNNER_TEMP/target"

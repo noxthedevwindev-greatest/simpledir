@@ -1,7 +1,7 @@
 # Maintainer: NoxTheDev <https://github.com/noxthedevwindev-greatest>
 # Contributor: Your Name <you@example.com>
 pkgname=simpledir
-pkgver=10.0.0
+pkgver=11.0.0
 pkgrel=1
 pkgdesc="Named directory shortcuts for your shell - a frecency-aware zoxide alternative"
 arch=('x86_64' 'aarch64')
@@ -11,10 +11,22 @@ depends=('curl')
 optdepends=('bash: shell wrapper for bash' 'zsh: shell wrapper for zsh'
             'fzf: interactive picker for `sd i`')
 makedepends=('g++')
-# a git source pinned to the tag: bump pkgver, push the tag, the AUR follows.
-# SKIP is only valid for VCS sources, which is exactly the point.
-source=("$pkgname::git+https://github.com/noxthedevwindev-greatest/simpledir.git#tag=v$pkgver")
-sha256sums=('SKIP')
+# Pinned to the tag's own tarball, with a real checksum.
+#
+# This used to be a git source with `sha256sums=('SKIP')`, which is the AUR
+# convention for VCS sources -- and it means makepkg verifies nothing at all. The
+# convention is there because a git tag is mutable, but a *released* tag is the
+# one case where the content is supposed to be fixed, so pinning the tarball and
+# its sha256 is both possible and the thing you actually want: makepkg now refuses
+# to build if the bytes differ from what this file names.
+#
+# Bumping a release means regenerating one line:
+#   updpkgsums
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('e72e418da843bb9805d476d70029a08810d25d21ba86838274d8be933d6685df')
+# GitHub regenerates these tarballs on occasion, which occasionally changes the
+# hash for an unchanged tag. That is the trade for the guarantee above: a mismatch
+# stops the build loudly instead of quietly installing different bytes.
 
 build() {
   cd "$srcdir/$pkgname"

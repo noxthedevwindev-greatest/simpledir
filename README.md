@@ -90,13 +90,13 @@ you have no compiler. either way you get `sd` plus an `sdcfg` symlink in
 `~/.local/bin` and a wired-up shell rc.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v10.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v11.0.0/install.sh | bash
 ```
 
 prefer to look before you pipe? that's the right instinct:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v10.0.0/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v11.0.0/install.sh -o install.sh
 less install.sh && bash install.sh
 ```
 
@@ -274,6 +274,75 @@ want there anyway.
 tested on bash 5.2. the wrapper only uses portable constructs, so zsh should be
 fine, but that's untested — tell me if it breaks.
 
+## what's new in 11.0
+
+**every download is now checked against a published checksum.** until now both
+`curl | bash` and `sdcfg update` asked one question of a binary fetched over the
+network: *does it claim to be us?* which is a question about what the file **says**.
+anything printing `sd 11.0.0` passed it — a tampered binary, a hijacked mirror, a CDN
+serving bytes nobody published.
+
+every release now ships a `SHA256SUMS`, and both paths compare the download against
+it before anything is run or replaced:
+
+```
+==> checksum verified against the published SHA256SUMS
+==> got sd 11.0.0 - every download is checked against its published checksum
+```
+
+and the failure is loud and fatal, because that is the one case where continuing
+would put someone else's bytes in your `PATH`:
+
+```
+!! CHECKSUM MISMATCH for sd-linux-x86_64
+!!   published: 3dac5b53a658...
+!!   downloaded: 1c72c1cf950f...
+xx the downloaded sd-linux-x86_64 does not match the checksum this release published.
+```
+
+a **missing** checksum is only a warning. an old mirror, an offline box, a release
+from before this one — none of those should brick an install, and v1.0.0/v2.0.0 (no
+assets, so no sums) still work. a **wrong** one is fatal.
+
+**`sd sha256 <file>`**, so you can check a download yourself without trusting the
+thing doing the verifying:
+
+```bash
+$ sd sha256 sd-linux-x86_64
+c48aa57e51ab936a10151cc8cf7e3f0b3f0ec021299bfadb22407de58625e610  sd-linux-x86_64
+$ printf abc | sd sha256 -
+ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  -
+```
+
+there is no crypto library in the dependency list and adding one for a hash
+function would be silly — SHA-256 is forty lines of arithmetic, so it is in `sd.cpp`,
+pinned to the published NIST vectors and cross-checked against coreutils on real
+files in the test suite. `curl` is still the only runtime dependency.
+
+**what this does and does not prove.** a checksum published next to the file it
+describes proves the two arrived together. it cannot prove *who* wrote them:
+anyone who can change the download can change the sum. what it catches is the
+ordinary failure — a truncated transfer, a corrupted mirror, a proxy that mangled a
+byte, an asset quietly swapped between two requests — and it catches it before a
+wrong binary lands in your `PATH`. signing releases is the next step up and this
+does not pretend to be it.
+
+**the packaging verifies too.** `packaging/PKGBUILD` was `sha256sums=('SKIP')`, which
+is the AUR convention for git sources and means makepkg verifies nothing at all.
+it now pins the tag's tarball with a real checksum, so makepkg refuses to build if
+the bytes differ. nixpkgs pins by hash already.
+
+**and it is checked continuously.** `.github/workflows/verify.yml` runs the suite,
+`make audit-tags` and `make check` on every push, and on a tag it rebuilds and
+checks the binary is static, reports the tag's own version, and actually jumps.
+
+645 assertions, up from 565. Two of the bugs this release found were in the
+verification code itself, which feels about right: three `die` calls in a row,
+where `die` exits and so printed the first line and dropped the rest, and a
+checksum file that listed itself — `sha256sum ... SHA256SUMS > SHA256SUMS` hashes the
+old file while truncating it, so its own line is wrong by construction. Both were
+caught by tests, which is the argument for writing them.
+
 ## what's new in 10.0
 
 the fast release. nothing new to learn — same commands, measurably less waiting.
@@ -376,7 +445,7 @@ sd: no alias named 'adapt'
 ```
 
 the binary was fine and `sdcfg adapt` was fine. only the wrapper's copy of the list
-was behind, which is why it survived 565 assertions — the tests called the binary
+was behind, which is why it survived 645 assertions — the tests called the binary
 directly.
 
 that list is a literal inside a generated string, so it's the easy thing to forget
@@ -439,7 +508,7 @@ copying.
 so the installer is pinned to its own tag now:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v10.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v11.0.0/install.sh | bash
 ```
 
 a tagged path never changes, so the cache is always correct for the version it
@@ -766,7 +835,7 @@ forward. `update --to` says so before it does it, and the way back is the
 installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v10.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v11.0.0/install.sh | bash
 ```
 
 it also checks on its own, at most **once a day**, and only when you're sitting
@@ -801,7 +870,7 @@ else with `SIMPLEDIR_BIN=/path/to/sd`.
 
 ```bash
 make                # build: one g++ invocation over one file
-make test           # 565 assertions, real bash subprocesses, no network
+make test           # 645 assertions, real bash subprocesses, no network
 make assets         # dist/ for a release: the binary, sd.cpp, install.sh
 make release        # tag, push, publish with assets attached
 vhs docs/demo.tape  # re-record the gif above (needs vhs + ttyd)

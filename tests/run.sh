@@ -544,6 +544,180 @@ printf '' > "$THR/history.json"
 check "an empty log still jumps"      0 sh -c "env SIMPLEDIR_CONFIG_DIR='$THR' '$SD' print one"
 rm -rf "$THR"
 
+# --- the verb lists cannot drift from the dispatch ----------------------------
+# Twice now a verb has reached the dispatch but not the list in front of it: the
+# shell wrapper did not forward `adapt` in v8.0.1, and the fast path's verb list
+# did not know `sha256`, so `sd sha256` tried to jump to an alias named "sha256".
+# The other direction is worse: a verb in the list with no handler used to exit 0
+# having done nothing at all. Both are silent, and silence is the one thing this
+# program never does.
+#
+# The lists are read out of --help rather than duplicated here, so this cannot
+# itself go stale. Verbs that can block or reach the network are skipped by name:
+# `edit` launches $EDITOR, and a test suite that hangs on `vi` is a bad suite.
+# Every call is under `timeout` so a future verb that blocks shows up as a failure
+# rather than as a run that never finishes.
+VSH=$(mktemp -d)
+# A usage line is "  <prog> <verb>" followed either by padding to the description
+# column or by an argument like `<file>`. Keying on that is what stops the prose
+# ("sd only reads your config") being scraped as a verb called "only" -- which it
+# was, until this assertion caught it.
+verbs_from_help() { # verbs_from_help <help text> <prog>
+  printf '%s\n' "$1" | awk -v prog="$2" '
+    $1 == prog {
+      # a usage line continues with padding to the description column, or with an
+      # argument. the prose lines do neither.
+      if ($0 ~ ("^  " prog " " $2 "  ") || $0 ~ ("^  " prog " " $2 " *[<[]")) print $2
+    }' | sort -u
+}
+cfg_verbs=$(verbs_from_help "$(env SIMPLEDIR_CONFIG_DIR="$VSH" "$CFG" --help 2>&1)" sdcfg)
+check "the config help lists verbs at all" 0 test -n "$cfg_verbs"
+for verb in $cfg_verbs; do
+  case $verb in
+    edit|update|revert|releases|uninstall) continue ;;
+  esac
+  out=$(timeout 20 env SIMPLEDIR_CONFIG_DIR="$VSH" SIMPLEDIR_NO_UPDATE_CHECK=1 \
+        HOME="$VSH" EDITOR=true VISUAL=true \
+        "$CFG" "$verb" </dev/null 2>&1; echo "rc=$?")
+  rc=$(printf '%s\n' "$out" | tail -1)
+  body=$(printf '%s\n' "$out" | sed '$d')
+  if [ "$rc" = "rc=124" ]; then
+    fail=$((fail + 1)); printf 'FAIL sdcfg %s hung (timeout)\n' "$verb"
+  elif [ "$rc" = "rc=0" ] && [ -z "$body" ]; then
+    fail=$((fail + 1))
+    printf 'FAIL sdcfg %s exits 0 having said nothing at all\n' "$verb"
+  else
+    pass=$((pass + 1)); printf 'ok   sdcfg %s either works or explains\n' "$verb"
+  fi
+done
+# and the move half, where the fast path keeps its own list
+move_verbs=$(verbs_from_help "$(env SIMPLEDIR_CONFIG_DIR="$VSH" "$SD" --help 2>&1)" sd)
+check "the move help lists verbs at all" 0 test -n "$move_verbs"
+for verb in $move_verbs; do
+  case $verb in
+    i|prompt) continue ;;   # i wants fzf; prompt wants a shell name
+  esac
+  out=$(timeout 20 env SIMPLEDIR_CONFIG_DIR="$VSH" "$SD" $verb </dev/null 2>&1 || true)
+  lacks "bare \`sd $verb\` is not treated as an alias" "no alias named" \
+    bash -c "cat <<< '$out'"
+done
+rm -rf "$VSH"
+
+# --- sha-256, and verifying what `update` downloads ----------------------------
+#
+# v11 makes `sdcfg update` check the bytes it downloads against a published
+# SHA256SUMS before it runs or replaces anything. Two different things need
+# proving, and it is worth keeping them apart:
+#
+#   * the hash function is correct -- a wrong one silently refuses every
+#     legitimate download, which looks exactly like an attack. So it is pinned to
+#     the published NIST vectors and cross-checked against coreutils on real files
+#   * the *policy* is right: a wrong sum is fatal, a missing sum is only a
+#     warning, and v1.0.0/v2.0.0 -- which have no assets and so no sums -- must
+#     still install
+
+SH=$(mktemp -d)
+has "sha256 of the empty string" \
+  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" \
+  "$(env SIMPLEDIR_CONFIG_DIR="$SH" "$SD" sha256 /dev/null 2>&1)"
+printf 'abc' > "$SH/abc"
+has "sha256 of abc" \
+  "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" \
+  "$(env SIMPLEDIR_CONFIG_DIR="$SH" "$SD" sha256 "$SH/abc" 2>&1)"
+printf 'abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq' > "$SH/vec448"
+has "sha256 of the 448-bit vector" \
+  "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1" \
+  "$(env SIMPLEDIR_CONFIG_DIR="$SH" "$SD" sha256 "$SH/vec448" 2>&1)"
+# the million-a vector is the one that catches a length field that only works
+# below 2^32 bits, which is a real bug class and not a hypothetical one
+python3 -c "import sys; sys.stdout.write('a'*1000000)" > "$SH/million"
+has "sha256 of a million 'a'" \
+  "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0" \
+  "$(env SIMPLEDIR_CONFIG_DIR="$SH" "$SD" sha256 "$SH/million" 2>&1)"
+# stdin, because that is how you hash a string
+has "sha256 from stdin" \
+  "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" \
+  "$(printf 'abc' | env SIMPLEDIR_CONFIG_DIR="$SH" "$SD" sha256 - 2>&1)"
+
+# cross-check against coreutils on real files. if these ever disagree, coreutils
+# is right and this is a bug -- which is precisely why the assertions are here.
+for fixture in "$ROOT/sd.cpp" "$ROOT/install.sh" "$ROOT/Makefile" "$ROOT/tests/run.sh"; do
+  has "sha256 agrees with coreutils on $(basename "$fixture")" \
+    "$(sha256sum "$fixture" | awk '{print $1}')" \
+    "$(env SIMPLEDIR_CONFIG_DIR="$SH" "$SD" sha256 "$fixture" 2>&1)"
+done
+# ...and on every byte value, which catches anything length- or content-dependent
+python3 -c "import sys; sys.stdout.buffer.write(bytes(range(256))*300)" > "$SH/allbytes"
+has "sha256 agrees on every byte value" \
+  "$(sha256sum "$SH/allbytes" | awk '{print $1}')" \
+  "$(env SIMPLEDIR_CONFIG_DIR="$SH" "$SD" sha256 "$SH/allbytes" 2>&1)"
+
+# its own arguments, because a verb that silently resolves an alias is the bug
+# this whole section exists next to
+check "sha256 needs a file" 2 env SIMPLEDIR_CONFIG_DIR="$SH" "$SD" sha256
+contains "and says which one" "sd sha256 <file>" \
+  "$(env SIMPLEDIR_CONFIG_DIR="$SH" "$SD" sha256 2>&1 || true)"
+check "sha256 rejects a missing file" 1 env SIMPLEDIR_CONFIG_DIR="$SH" "$SD" sha256 /nope/here
+check "sha256 rejects a directory"    1 env SIMPLEDIR_CONFIG_DIR="$SH" "$SD" sha256 "$SH"
+
+# every move verb, with no arguments, must complain about itself rather than
+# trying to jump to an alias that happens to share its name. the fast path has
+# its own list of verbs and it once drifted from the dispatch.
+for verb in ls i print top suggest adapt sha256; do
+  out=$(env SIMPLEDIR_CONFIG_DIR="$SH" "$SD" $verb 2>&1 || true)
+  lacks "bare \`sd $verb\` is not an alias" "no alias named" bash -c "cat <<< '$out'"
+done
+rm -rf "$SH"
+
+# the policy around the checksum, on the path that matters
+VER=$(mktemp -d); mkdir -p "$VER/pub/download/v9.0.0" "$VER/cfg"
+ver_asset="sd-linux-$(uname -m | sed -e 's/x86_64/x86_64/' -e 's/aarch64/arm64/')"
+build_ver() { # build_ver <version>
+  g++ -std=c++17 -O1 -o "$VER/pub/download/v9.0.0/$ver_asset" "$ROOT/sd.cpp" \
+      -DVERSION="\"$1\"" 2>/dev/null
+}
+ver_update() { env SIMPLEDIR_CONFIG_DIR="$VER/cfg" SIMPLEDIR_BIN="$VER/installed" \
+                 SIMPLEDIR_RELEASE_URL="file://$VER/pub" \
+                 SIMPLEDIR_SOURCE_URL="file://$VER/nothing-here" \
+                 SIMPLEDIR_NO_UPDATE_CHECK=1 "$CFG" update --to v9.0.0 </dev/null 2>&1; }
+ver_installed() { test -x "$VER/installed"; }
+
+build_ver 9.0.0
+( cd "$VER/pub/download/v9.0.0" && sha256sum "$ver_asset" > SHA256SUMS )
+out=$(ver_update)
+contains "update verifies a matching checksum" "verified against" "$out"
+check   "and installs" 0 ver_installed
+
+# same file, same --version output, wrong bytes: the case identity checks cannot
+# catch and only a hash can
+build_ver 9.0.0
+printf '%064d  %s\n' 0 "$ver_asset" > "$VER/pub/download/v9.0.0/SHA256SUMS"
+rm -f "$VER/installed"
+out=$(ver_update || true)
+has   "a wrong checksum is fatal for update" "does not match"      "$out"
+has   "and shows the published one"          "published:"          "$out"
+has   "and the one it got"                   "downloaded:"         "$out"
+has   "and says nothing was changed"         "nothing was changed" "$out"
+check  "and nothing was installed" 1 ver_installed
+
+# a sums file listing something else is 'unverified', not 'tampered'
+build_ver 9.0.0
+printf '%064d  some-other-file\n' 0 > "$VER/pub/download/v9.0.0/SHA256SUMS"
+rm -f "$VER/installed"
+out=$(ver_update)
+contains "an unrelated sums file is not a pass" "could not be verified" "$out"
+lacks   "and is not treated as tampering"      "does not match"       "$out"
+check   "and it installs anyway" 0 ver_installed
+
+# no sums at all. v1.0.0 and v2.0.0 have no assets and so no sums, and the
+# source fallback has to keep working: this is the regression that matters.
+build_ver 9.0.0
+rm -f "$VER/pub/download/v9.0.0/SHA256SUMS" "$VER/installed"
+out=$(ver_update)
+contains "a missing checksum only warns" "could not be verified" "$out"
+check   "and still installs" 0 ver_installed
+rm -rf "$VER"
+
 # --- sdcfg bench --------------------------------------------------------------
 # v10 is the release about being fast, so it ships the measuring stick. None of
 # these assert a timing -- a test that fails on a loaded machine teaches you to
@@ -1393,6 +1567,103 @@ env HOME="$DOWN" SIMPLEDIR_ALLOW_DOWNGRADE=1 SHELL=/bin/bash PATH="/usr/bin:/bin
   bash "$DOWN/i.sh" </dev/null >/dev/null 2>&1
 check "the override does downgrade"          0 bash -c \
   "'$DOWN/.local/bin/sd' --version | grep -q '^sd 6.0.0'"
+# Integrity, not just identity -----------------------------------------------
+#
+# Everything above asks "is this simpledir, and is it the right version?" by
+# running `--version`. That proves what the file *says*, not what the file *is*:
+# anything printing `sd 10.0.0` passes, including a tampered binary, a hijacked
+# mirror, or a CDN serving bytes nobody published. So every release ships a
+# SHA256SUMS and the installer compares the download against it.
+#
+# The property that matters is the asymmetry: a *missing* checksum is a warning, a
+# *wrong* one is fatal. An old mirror, an offline box or a hand-copied asset
+# shouldn't brick the install; a tampered one must never be installed quietly.
+#
+# Each scenario gets its own directory. Sharing one across them made these tests
+# lie: an earlier scenario's successful install left a binary behind and the next
+# scenario's "it did not install" assertion then failed for the wrong reason.
+
+# sums_scenario <name>; sets $SUM, $DL and defines sumbuild/sumdl for that case
+sums_scenario() {
+  SUM=$(mktemp -d); mkdir -p "$SUM/pub/releases/latest/download"
+  DL="$SUM/pub/releases/latest/download"
+  cp install.sh "$SUM/i.sh"
+  sumbuild() { g++ -std=c++17 -O1 -o "$DL/$asset" "$ROOT/sd.cpp" -DVERSION="\"$1\"" 2>/dev/null; }
+  sumdl() { env HOME="$SUM" SHELL=/bin/bash PATH="/usr/bin:/bin" SIMPLEDIR_NO_RC=1 \
+              SIMPLEDIR_BASE_URL="file://$SUM/pub" SIMPLEDIR_SOURCE_URL="file://$ROOT" \
+              SIMPLEDIR_NO_UPDATE_CHECK=1 bash "$SUM/i.sh" "$@" </dev/null; }
+  installed() { test -e "$SUM/.local/bin/sd"; }
+  publishes_sums_for_asset() { ( cd "$DL" && sha256sum "$asset" > SHA256SUMS ); }
+}
+
+# 1. a release that publishes a correct checksum: verified, and it says so
+sums_scenario
+sumbuild "$sh_version"
+publishes_sums_for_asset
+out=$(sumdl 2>&1)
+has     "a matching checksum is reported" "checksum verified" "$out"
+contains "and it names the file"          "$asset"           "$out"
+check   "a verified asset installs" 0 bash -c \
+  "'$SUM/.local/bin/sd' --version | grep -q '^sd $sh_version'"
+rm -rf "$SUM"
+
+# 2. the published checksum disagrees with the download: refuse, install nothing
+sums_scenario
+sumbuild "$sh_version"
+# right filename, wrong hash. this is what a tampered release actually looks like
+printf '%064d  %s\n' 0 "$asset" > "$DL/SHA256SUMS"
+out=$(sumdl 2>&1 || true)
+has     "a wrong checksum is loud"     "CHECKSUM MISMATCH" "$out"
+has     "and it shows the expected one" "published:"        "$out"
+has     "and the one it got"            "downloaded:"       "$out"
+has     "and it says what to do"        "--source"          "$out"
+check   "a mismatched asset is not installed" 0 bash -c \
+  "! test -e '$SUM/.local/bin/sd'"
+rm -rf "$SUM"
+
+# 3. the one that matters: the binary still reports the right version, and it is
+#    still the wrong bytes. No identity check can catch this. A checksum can.
+sums_scenario
+sumbuild "$sh_version"
+publishes_sums_for_asset
+printf 'tampered-bytes' >> "$DL/$asset"
+has "the tampered binary still claims to be ours" "$sh_version" "$("$DL/$asset" --version)"
+out=$(sumdl 2>&1 || true)
+has   "a tampered binary is refused"    "CHECKSUM MISMATCH" "$out"
+check "and it is not installed" 0 bash -c "! test -e '$SUM/.local/bin/sd'"
+rm -rf "$SUM"
+
+# 4. no checksum published at all: warn, but still install. An old mirror or an
+#    offline box is not a reason to refuse a binary that reports itself correctly.
+sums_scenario
+sumbuild "$sh_version"
+out=$(sumdl 2>&1)
+has   "a missing checksum is a warning" "no published checksum" "$out"
+check "and the install still happens" 0 bash -c \
+  "'$SUM/.local/bin/sd' --version | grep -q '^sd $sh_version'"
+rm -rf "$SUM"
+
+# 5. a sums file that lists something else must read as "unverified", not as a
+#    pass and not as a failure
+sums_scenario
+sumbuild "$sh_version"
+printf '%064d  some-other-file\n' 0 > "$DL/SHA256SUMS"
+out=$(sumdl 2>&1)
+has   "an unrelated sums file is not a pass" "no published checksum" "$out"
+lacks "and is not treated as tampering"     "CHECKSUM MISMATCH"    "$out"
+check "and the install still happens" 0 bash -c \
+  "'$SUM/.local/bin/sd' --version | grep -q '^sd $sh_version'"
+rm -rf "$SUM"
+
+# and `make assets` really does produce one, covering every asset it ships
+check "make assets writes SHA256SUMS" 0 bash -c \
+  "make -s -C '$ROOT' assets >/dev/null 2>&1 && test -s '$ROOT/dist/SHA256SUMS'"
+check "it covers the binary"  0 grep -q "$asset"  "$ROOT/dist/SHA256SUMS"
+check "it covers sd.cpp"      0 grep -q 'sd.cpp'    "$ROOT/dist/SHA256SUMS"
+check "it covers install.sh"  0 grep -q 'install.sh' "$ROOT/dist/SHA256SUMS"
+check "every line is a real sha256 of the file beside it" 0 bash -c \
+  "cd '$ROOT/dist' && sha256sum -c --quiet SHA256SUMS"
+
 # the other floor: an asset older than the installer, with nothing installed at
 # all. raw.githubusercontent caches by path, so it will serve an install.sh from
 # before a fix and then hand that installer a source file from before it too.

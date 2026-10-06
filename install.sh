@@ -3,7 +3,7 @@
 # simpledir installer. finds a prebuilt binary for this box, or compiles one,
 # then installs sd + sdcfg and wires your shell rc.
 #
-#   curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v10.0.0/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v11.0.0/install.sh | bash
 #
 # options:
 #   --source        compile from source even if a binary exists
@@ -32,7 +32,7 @@ BASE="${SIMPLEDIR_BASE_URL:-https://github.com/$OWNER/$REPO}"
 # changes, so the cache is always right for the version it names.
 #
 # Keep this in step with VERSION in sd.cpp; a test checks that it is.
-SD_VERSION="10.0.0"
+SD_VERSION="11.0.0"
 RAW="${SIMPLEDIR_SOURCE_URL:-https://raw.githubusercontent.com/$OWNER/$REPO/v$SD_VERSION}"
 case "$RAW" in */) ;; *) RAW="$RAW/" ;; esac
 BIN_DIR="${SIMPLEDIR_BIN_DIR:-$HOME/.local/bin}"
@@ -76,6 +76,7 @@ case "$uname_m" in
 esac
 
 ASSET="sd-linux-$ARCH"
+SUMS="SHA256SUMS"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -166,6 +167,43 @@ fetch() { # fetch <url> <dest>; returns non-zero if it isn't there
   curl -fsSL --retry 2 --connect-timeout 15 "$1" -o "$2" 2>/dev/null
 }
 
+# The sha256 a release published for <name>, or nothing.
+#
+# This is the difference between "the file says it is simpledir 10.0.0" and "these
+# are the bytes simpledir 10.0.0 shipped". Running --version only proves the first:
+# anything that prints the right string passes it, including a tampered binary, a
+# compromised mirror, or a CDN serving something nobody published.
+sum_for() { # sum_for <sumsfile> <name>
+  [ -f "$1" ] || return 1
+  awk -v want="$2" '$2 == want || $2 == "*"want { print $1; found = 1 }
+    END { exit !found }' "$1"
+}
+
+# returns 0 verified, 1 no checksum to compare against, 2 mismatch
+verify_download() { # verify_download <file> <name>
+  local want got
+  want=$(sum_for "$work/SHA256SUMS" "$2" 2>/dev/null) || want=""
+  if [ -z "$want" ]; then
+    return 1
+  fi
+  if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+    warn "no sha256sum on this system, so the download could not be checked."
+    return 1
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    got=$(sha256sum "$1" 2>/dev/null | awk '{print $1}')
+  else
+    got=$(shasum -a 256 "$1" 2>/dev/null | awk '{print $1}')
+  fi
+  if [ "$got" != "$want" ]; then
+    warn "CHECKSUM MISMATCH for $2"
+    warn "  published: $want"
+    warn "  downloaded: $got"
+    return 2
+  fi
+  return 0
+}
+
 # Put a working `sd` at the path given. Tries the prebuilt binary for this
 # box first, and compiles from source if there isn't one. No traps: explicit
 # cleanup is easier to reason about than a RETURN trap that fires when some
@@ -178,6 +216,25 @@ obtain() {
   if [ "$FORCE_SOURCE" = "0" ]; then
     info "fetching the $ASSET binary"
     if fetch "$BASE/releases/latest/download/$ASSET" "$work/sd"; then
+      # grab the published checksums alongside it. best effort: an older release,
+      # a mirror that doesn't carry it, or a --source install has none, and none
+      # of those are reasons to refuse to install something that is otherwise fine.
+      fetch "$BASE/releases/latest/download/$SUMS" "$work/$SUMS" || rm -f "$work/$SUMS"
+      verify_download "$work/sd" "$ASSET"
+      case $? in
+        0) info "checksum verified against the published $SUMS" ;;
+        2)
+          rm -rf "$work"
+          die "the downloaded $ASSET does not match the checksum this release published.
+
+not installing it. that is either a corrupted download, a mirror serving
+something else, or a release nobody signed off on. try again, or build the
+source you can read instead:
+
+    bash $0 --source"
+          ;;
+        1) warn "no published checksum for $ASSET, so it could not be verified." ;;
+      esac
       chmod 755 "$work/sd"
       # refuse anything that isn't our tool: a 404 page would otherwise get
       # chmod +x'd into your PATH

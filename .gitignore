@@ -5,3 +5,7 @@ dist/
 __pycache__/
 *.o
 .DS_Store
+
+# editor / agent scratch files. these are somebody's tool state, not source, and
+# `git add -A` sweeping them into a commit is how they end up in a release.
+.aider.*

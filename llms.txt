@@ -20,7 +20,7 @@ Linux. MIT. Zero dependencies beyond `curl` — the binary is linked statically.
 ## Install
 
 ```
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v10.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v11.0.0/install.sh | bash
 ```
 
 The installer detects the platform, downloads a prebuilt `sd-linux-x86_64` or
@@ -207,6 +207,12 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ## Version history
 
+- 11.0.0 — every download is verified against a published SHA256SUMS, by both the
+  `curl | bash` installer and `sdcfg update`/`revert`, before anything is run or
+  replaced. A missing checksum is a warning; a wrong one is fatal. `sd sha256 <file>`
+  checks a download by hand. SHA-256 is implemented in sd.cpp (no new dependency)
+  and pinned to the NIST vectors. packaging/PKGBUILD now pins a real checksum
+  instead of `SKIP`, and CI runs the suite, audit-tags and check on every push.
 - 10.0.0 — linked fully static and with no iostreams, so a jump went from 1.44ms to
   0.76ms and the only runtime dependency left is curl; the visit throttle now scans
   history.json for a single timestamp instead of parsing the whole log; and `sdcfg
@@ -274,7 +280,7 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ```
 make        # one g++ invocation over one file
-make test   # 565 assertions against the compiled binary, no network
+make test   # 645 assertions against the compiled binary, no network
 make assets # dist/ (the binary, sd.cpp, install.sh, mode 755)
 make release
 ```

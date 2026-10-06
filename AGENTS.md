@@ -112,7 +112,35 @@ you. keep it that way — the split is the whole ergonomic argument, and it mean
     tree for 500 entries to look up one key was the single most expensive thing the
     program did, and `sd <alias>` was slower than `sd ls` because of it.
 
-19. **don't add a daemon.** a resident process holding the frecency model in memory is
+19. **a checksum proves the bytes arrived together, not who wrote them.** every
+    release ships a `SHA256SUMS`, and `install.sh`, `install_release()` in sd.cpp
+    and the PKGBUILD all verify against it. keep the asymmetry: a **missing**
+    checksum warns and continues (old mirrors, v1.0.0/v2.0.0 have no assets at
+    all), a **wrong** one is fatal before anything is run or replaced. do not
+    "improve" this by making a missing sum fatal — it bricks installs for reasons
+    that have nothing to do with tampering. sha256 lives in sd.cpp on purpose:
+    forty lines of arithmetic beats a crypto dependency, and it is pinned to the
+    NIST vectors in the suite. nothing here is signature verification and it must
+    never be described as though it were.
+
+20. **`die` exits, so it is never called twice.** three `die` calls in a row print
+    the first line and drop the rest, which looks exactly like a silent failure.
+    one multi-line `die` is the pattern the rest of install.sh already uses. the
+    same trap exists in the dispatch: `run_config` used to end in a bare
+    `return 0`, so a verb listed in `known` with no handler exited 0 having done
+    nothing — which is how `sdcfg bench` vanished for a while with every test green.
+
+21. **verb lists drift, so guard them.** three lists have to agree and they have
+    all been wrong: the shell wrapper's literal forwarded set (v8.0.1 didn't
+    forward `adapt`), the fast path's set inside `run_move` (`sd sha256` tried to
+    jump to an alias named "sha256"), and the `known`/`config_verbs` sets in
+    `run_config`. sd.cpp now has `move_verbs()` as the single source for the move
+    half. the suite derives both halves' lists out of `--help` and asserts that no
+    verb exits 0 having said nothing, and that no bare `sd <verb>` is treated as an
+    alias. if you add a verb, add it to `--help` too or those assertions stop
+    covering it — that is the whole mechanism.
+
+22. **don't add a daemon.** a resident process holding the frecency model in memory is
     the obvious answer to "make it fast" and it is measurably the wrong one: parsing
     the log cost ~120us, a unix socket round trip costs about the same, and
     `sd <alias>` never searched the log at all. the real cost was pre-`main` work — the
@@ -124,10 +152,10 @@ you. keep it that way — the split is the whole ergonomic argument, and it mean
 ## before you touch anything
 
 ```bash
-make test     # 565 assertions, spawns real bash to verify the wrapper
+make test     # 645 assertions, spawns real bash to verify the wrapper
 ```
 
-it must be 565/565 (or more) before you commit. the suite drives the *compiled*
+it must be 645/645 (or more) before you commit. the suite drives the *compiled*
 binary through the same command-line surface a user does, and it covers the
 python-era behaviours too: the `cd` the wrapper actually performs, `install.sh`
 (platform refusal, asset download, compile fallback, install/uninstall round

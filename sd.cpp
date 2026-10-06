@@ -49,7 +49,7 @@
 namespace fs = std::filesystem;
 
 #ifndef VERSION
-#define VERSION "10.0.0"
+#define VERSION "11.0.0"
 #endif
 
 // The one line this release is about, shown by `--version`. A number on its own
@@ -57,7 +57,7 @@ namespace fs = std::filesystem;
 // test suite builds stub binaries with -DVERSION, and a TAGLINE that only exists
 // when VERSION does not would leave those stubs uncompilable.
 #ifndef TAGLINE
-#define TAGLINE "no daemon, no iostream, 0.4 ms per jump"
+#define TAGLINE "every download is checked against its published checksum"
 #endif
 
 #define CONFIG_VERSION 3
@@ -193,6 +193,19 @@ class Out {
 
 Out out(1);
 Out err(2);
+
+// Every subcommand the move half has.
+//
+// One list, because the fast path has to recognise a verb before it decides a
+// bare word is an alias name, and the dispatch further down has to agree with it.
+// Those were two separate literals and that is exactly how `sd sha256` came to
+// resolve an alias called "sha256" instead of complaining about its arguments --
+// the same class of bug as v8.0.1, where `adapt` reached the dispatch but the
+// shell wrapper never forwarded it. If you add a move verb, add it here.
+const std::set<std::string>& move_verbs() {
+  static const std::set<std::string> verbs = {"ls", "i", "print", "top", "suggest", "adapt", "sha256"};
+  return verbs;
+}
 
 // What std::getline(std::cin, x) used to do, for the four places that ask a
 // question. Nothing else in the program reads a whole line off stdin.
@@ -3143,6 +3156,144 @@ std::string normalize_tag(const std::string& raw) {
 // then swap it in. The binary it replaces is kept as `sd.previous`, which is what
 // `revert` puts back.
 //
+// ------------------------------------------------------------------- sha-256
+//
+// `sdcfg update` downloads a binary over the network and swaps it in, so asking
+// "did these bytes arrive intact?" is not optional. There is no TLS in the C++
+// standard library and no crypto library in the dependency list, and adding one
+// for a hash function that is forty lines of arithmetic would be silly: SHA-256
+// is exactly the kind of thing this project does with nothing but the stdlib.
+//
+// It is here to verify, never to authenticate. A checksum published next to the
+// file it describes proves the two arrived together; it cannot prove who wrote
+// them. Anyone who can change the download can change the sum. What it does catch
+// is the ordinary failure — a truncated transfer, a corrupted mirror, a proxy
+// that mangled a byte, an asset quietly swapped between two requests — and it
+// catches it before a wrong binary lands in your PATH.
+
+constexpr uint32_t SHA256_K[64] = {
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
+
+inline uint32_t rotr(uint32_t x, int n) { return (x >> n) | (x << (32 - n)); }
+
+// returns the lowercase hex digest of `data`
+std::string sha256_hex(const std::string& data) {
+  uint32_t h[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                   0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+
+  std::string msg = data;
+  const uint64_t bits = static_cast<uint64_t>(data.size()) * 8;
+  msg.push_back(static_cast<char>(0x80));
+  while (msg.size() % 64 != 56) msg.push_back('\0');
+  for (int i = 7; i >= 0; i--) msg.push_back(static_cast<char>((bits >> (i * 8)) & 0xff));
+
+  for (size_t chunk = 0; chunk < msg.size(); chunk += 64) {
+    uint32_t w[64];
+    for (int i = 0; i < 16; i++) {
+      const unsigned char* p = reinterpret_cast<const unsigned char*>(msg.data()) + chunk + i * 4;
+      w[i] = (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16) |
+             (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
+    }
+    for (int i = 16; i < 64; i++) {
+      uint32_t s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
+      uint32_t s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
+      w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+    }
+    uint32_t a = h[0], b = h[1], c = h[2], d = h[3];
+    uint32_t e = h[4], f = h[5], g = h[6], hh = h[7];
+    for (int i = 0; i < 64; i++) {
+      uint32_t S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+      uint32_t ch = (e & f) ^ (~e & g);
+      uint32_t t1 = hh + S1 + ch + SHA256_K[i] + w[i];
+      uint32_t S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+      uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+      uint32_t t2 = S0 + maj;
+      hh = g; g = f; f = e; e = d + t1;
+      d = c; c = b; b = a; a = t1 + t2;
+    }
+    h[0] += a; h[1] += b; h[2] += c; h[3] += d;
+    h[4] += e; h[5] += f; h[6] += g; h[7] += hh;
+  }
+
+  static const char* digits = "0123456789abcdef";
+  std::string out;
+  out.reserve(64);
+  for (uint32_t word : h)
+    for (int i = 3; i >= 0; i--) {
+      unsigned byte = (word >> (i * 8)) & 0xff;
+      out.push_back(digits[byte >> 4]);
+      out.push_back(digits[byte & 0xf]);
+    }
+  return out;
+}
+
+// The sha256 a sums file publishes for `name`, or "" when it doesn't list it.
+// The file is `sha256sum` output: "<64 hex>  <name>", two spaces, names bare.
+std::string published_sum(const std::string& sums, const std::string& name) {
+  std::istringstream in(sums);
+  std::string line;
+  while (std::getline(in, line)) {
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+    size_t gap = line.find_first_of(" \t");
+    if (gap == std::string::npos) continue;
+    std::string digest = line.substr(0, gap);
+    std::string listed = line.substr(gap);
+    while (!listed.empty() && (listed.front() == ' ' || listed.front() == '\t')) listed.erase(0, 1);
+    if (!listed.empty() && listed[0] == '*') listed.erase(0, 1);
+    if (listed != name) continue;
+    for (char c : digest) {
+      bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+      if (!hex) return "";
+    }
+    if (digest.size() != 64) return "";
+    for (char& c : digest) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return digest;
+  }
+  return "";
+}
+
+// Where the SHA256SUMS for a release lives. `latest` is a redirect like the asset
+// itself, so it has to be spelled the same way or the two can come from different
+// releases -- which would report every download as tampered.
+std::string sums_url_for(const std::string& base, const std::string& tag) {
+  std::string stem = tag == "latest" ? base + "/latest/download/" : base + "/download/" + tag + "/";
+  return stem + "SHA256SUMS";
+}
+
+// `sd sha256 <file>`, so verifying a release does not require trusting the thing
+// doing the verifying. Every release publishes a SHA256SUMS, and the installer
+// and `update` both check it; this is for the person who wants to look for
+// themselves, or who downloaded an asset by hand and has nothing to point it at.
+int cmd_sha256(const Args& args) {
+  std::string what = args.word(0);
+  if (what.empty())
+    throw UsageError("which file? " + MOVE + " sha256 <file>\n"
+                     "  to check a download against its release: " + MOVE +
+                     " sha256 sd-linux-x86_64");
+  if (what == "-") {
+    // piped in, because that is how you hash a string: printf abc | sd sha256 -
+    std::string all;
+    char buf[65536];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof buf, stdin)) > 0) all.append(buf, n);
+    out << sha256_hex(all) << "  -\n";
+    return 0;
+  }
+  std::string path = abspath(what);
+  if (!path_exists(path)) die("no such file: " + path);
+  std::error_code ec;
+  if (fs::is_directory(path, ec)) die("that's a directory: " + path + "\n  hash a file, not a directory");
+  out << sha256_hex(read_file(path)) << "  " << what << "\n";
+  return 0;
+}
+
 // One download, straight to a staging file beside the target: the old version
 // fetched to /tmp to test it and then fetched the same bytes again, which is two
 // chances to fail and twice the bandwidth for no reason.
@@ -3202,6 +3353,34 @@ int install_release(const std::string& tag, bool allow_older) {
     die("download failed for " + tag + ":\n  tried " + join(tried, "\n         ") +
         "\n  check the tag with " + CONFIG + " releases");
   }
+  // Check the bytes against the checksum this release published, before anything
+  // is run or replaced. Fetching the sums file is best effort: v1.0.0 and v2.0.0
+  // have no release assets at all and so have no sums, and neither does a mirror
+  // that only carries binaries. A *wrong* sum is never best effort -- that is the
+  // one case where continuing would put someone else's bytes in your PATH.
+  if (!from_source) {
+    std::string sums_staged = staged + ".sums";
+    bool have_sums = download(sums_url_for(base, tag), sums_staged);
+    std::string listed;
+    if (have_sums) listed = published_sum(read_file(sums_staged), asset_name());
+    fs::remove(sums_staged, ec);
+    if (!listed.empty()) {
+      std::string actual = sha256_hex(read_file(staged));
+      if (actual != listed) {
+        fs::remove(staged, ec);
+        die("the downloaded " + asset_name() + " does not match the checksum this release published.\n"
+            "  published: " + listed + "\n"
+            "  downloaded: " + actual + "\n"
+            "  nothing was changed. that is a corrupted download, a mirror serving something\n"
+            "  else, or a release nobody signed off on -- try again, or build the source:\n"
+            "    " + CONFIG + " update --to " + tag + "  (with SIMPLEDIR_RELEASE_URL pointed at a mirror you trust)");
+      }
+      out << "  verified against the published SHA256SUMS\n";
+    } else {
+      out << "  no published checksum for " << asset_name() << ", so it could not be verified\n";
+    }
+  }
+
   // Say where it actually came from. Only worth a line when that isn't obvious:
   // a source fallback is normal for the very old releases and alarming otherwise.
   if (from_source) {
@@ -3555,7 +3734,8 @@ int cmd_init() {
             // 'adapt'". A test derives the list from the help text.
             << "  if [ \"${1-}\" = \"ls\" ] || [ \"${1-}\" = \"i\" ] || [ \"${1-}\" = \"print\" ]"
                " || [ \"${1-}\" = \"top\" ] || [ \"${1-}\" = \"suggest\" ]"
-               " || [ \"${1-}\" = \"adapt\" ] || "
+               " || [ \"${1-}\" = \"adapt\" ]"
+               " || [ \"${1-}\" = \"sha256\" ] || "
                "([ \"${1:0:1}\" = \"@\" ]) || "
                "([ \"${1:0:1}\" = \"-\" ] && [ \"${1-}\" != \"-\" ]); then\n"
             << "    command " << MOVE << " \"$@\";\n"
@@ -3855,6 +4035,7 @@ const char* MOVE_HELP =
     "  sd suggest --json            as JSON\n"
     "  sd i [<query>]               interactive picker (fzf if installed)\n"
     "  sd adapt [--top N]           directories you keep visiting that have no name\n"
+    "  sd sha256 <file>             hash a file, to check a download against its release\n"
     "\n"
     "  sd --help                    this text\n"
     "  sd --version                 print the version and exit\n"
@@ -3875,6 +4056,11 @@ const char* CONFIG_HELP =
     "  sdcfg rename <old> <new>     rename, keeping the path\n"
     "  sdcfg import <dir>           bind every subdirectory of a tree at once\n"
     "  sdcfg bind                   name everything `sd suggest` found\n"
+    "  sdcfg tag @name <alias>...  group aliases; `sd @name` lists them\n"
+    "  sdcfg project add <n> [p]  an alias that follows you into a project\n"
+    "  sdcfg adapt [--accept <n>] remember what you said about a suggestion\n"
+    "  sdcfg export [<file>]     write a portable config; $HOME becomes ~\n"
+    "  sdcfg adopt <file>        merge one back in\n"
     "  sdcfg forget                 drop directories from the visit log\n"
     "  sdcfg migrate                migrate the config file to the current version\n"
     "  sdcfg zoxide                 import the directories zoxide knows about\n"
@@ -3887,11 +4073,12 @@ const char* CONFIG_HELP =
     "  sdcfg releases               list the published releases\n"
     "  sdcfg uninstall              remove the binaries and the wrapper\n"
     "  sdcfg doctor                 check the install\n"
+    "  sdcfg bench [--runs N]    how long a jump takes on this machine\n"
     "\n"
     "  sdcfg --help                 this text\n"
     "  sdcfg --version              print the version and exit\n"
     "\n"
-    "  to move, use sd: sd <alias>, sd ls, sd i, ...\n"
+    "  to move, use sd: sd <alias>, sd ls, sd i, sd sha256, ...\n"
     "  flags are long-form only: --force --dry-run --keep-symlinks --purge --yes\n"
     "\n"
     "  `migrate` moves your config file from version 1 to version 2. `update`\n"
@@ -3931,8 +4118,7 @@ int run_move(const std::vector<std::string>& argv) {
       out << MOVE_HELP;
       return 0;
     }
-    const std::set<std::string> verbs = {"ls", "print", "suggest", "i", "top", "adapt"};
-    if (!starts_with(argv[0], "-") && !verbs.count(argv[0])) {
+    if (!starts_with(argv[0], "-") && !move_verbs().count(argv[0])) {
       Config cfg = load_config();
       out << jump(argv[0], cfg, now_seconds()) << "\n";
       return 0;
@@ -3979,6 +4165,7 @@ int run_move(const std::vector<std::string>& argv) {
     out << jump(args.words[0], cfg, now_seconds()) << "\n";
     return 0;
   }
+  if (verb == "sha256") return cmd_sha256(parse_args(rest));
   static const std::set<std::string> config_verbs = {
       "add", "rm", "rename", "import", "bind", "tag", "project", "adapt", "forget", "migrate", "bench",
       "zoxide", "prompt", "export", "adopt",
@@ -4041,6 +4228,7 @@ int run_config(const std::vector<std::string>& argv) {
   if (verb == "uninstall") return cmd_uninstall(args);
   if (verb == "doctor") return cmd_doctor();
   if (verb == "bench") return cmd_bench(args);
+
   if (verb == "init") return cmd_init();
   if (verb == "prompt") return cmd_prompt(args.word(0));
   if (verb == "edit") {
@@ -4058,7 +4246,14 @@ int run_config(const std::vector<std::string>& argv) {
     if (shell != "bash" && shell != "zsh") throw UsageError("completions takes bash or zsh");
     return cmd_completions(shell);
   }
-  return 0;
+  // Unreachable in a correct build: `known` above is the list of verbs and every
+  // one of them has a line above. It used to be a bare `return 0`, which means
+  // adding a verb to `known` and forgetting the dispatch made it exit 0 having
+  // done nothing -- silently, which is the one thing this program never does.
+  // `sdcfg bench` did exactly that for a while and nothing caught it.
+  die("'" + verb + "' is listed as a command but nothing handles it.\n"
+      "  that is a bug in " + MOVE + ", not something you did wrong: " + CONFIG + " " + verb +
+      " should have done something.");
 }
 
 }  // namespace
