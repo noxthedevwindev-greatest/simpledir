@@ -20,7 +20,7 @@ Linux. MIT. Zero dependencies beyond libstdc++ and `curl`.
 ## Install
 
 ```
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v8.0.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v9.0.0/install.sh | bash
 ```
 
 The installer detects the platform, downloads a prebuilt `sd-linux-x86_64` or
@@ -207,6 +207,11 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ## Version history
 
+- 9.0.0 — tags (`sdcfg tag @name <alias>...`, `sd @name`, `sd @name <alias>`,
+  `sd ls @name`); per-project aliases in a `.simpledir.json` beside a project,
+  stored relative so they travel, and the project's name wins inside the tree; and
+  `sdcfg export` / `sdcfg adopt` for a config that survives a machine change, with
+  `$HOME` written as `~`. Config version 3.
 - 8.0.1 — the shell wrapper forwards `adapt`; the list of read-only verbs it
   forwards is a literal, and a test now derives it from the help text so the next
   verb can't be left out of it.

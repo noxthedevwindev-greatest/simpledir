@@ -90,13 +90,13 @@ you have no compiler. either way you get `sd` plus an `sdcfg` symlink in
 `~/.local/bin` and a wired-up shell rc.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v8.0.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v9.0.0/install.sh | bash
 ```
 
 prefer to look before you pipe? that's the right instinct:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v8.0.1/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v9.0.0/install.sh -o install.sh
 less install.sh && bash install.sh
 ```
 
@@ -274,6 +274,51 @@ want there anyway.
 tested on bash 5.2. the wrapper only uses portable constructs, so zsh should be
 fine, but that's untested — tell me if it breaks.
 
+## what's new in 9.0
+
+three things for getting at more than a dozen aliases without losing the plot.
+
+**tags — named groups.** `sd @work` is "the directories I use for work":
+
+```bash
+sdcfg tag @work dots hypr projects
+sd @work              # lists them
+sd @work dots         # jumps to one
+sd ls @work           # filters ls
+```
+
+a tag holds *names*, not paths, so renaming or rebinding an alias updates every tag
+that mentions it, and `sd @work dots` can never disagree with `sd dots` about where
+dots is. `sd ls` marks which tags each alias is in.
+
+**project aliases — `src` means this project's src.** a global `src` is wrong for
+every project that has its own. so a project can carry its own aliases in a
+`.simpledir.json` beside it, and they exist while you are anywhere inside that tree:
+
+```bash
+cd ~/Projects/simpledir && sdcfg project add src src
+cd ~/Projects/simpledir/src/lib && sd src      # works: still inside the project
+```
+
+paths inside a project file are stored **relative**, so the file can be committed
+and used on another machine. the project's own name wins inside the tree and the
+global one applies everywhere else, the way a local `.env` does.
+
+**export / adopt — a config that travels.** absolute paths are no use on another
+machine, so exporting writes `$HOME` as `~`:
+
+```bash
+sdcfg export sd-config.json
+# on the other machine
+sdcfg adopt sd-config.json
+```
+
+tags travel with it. a name that already points somewhere different is reported
+rather than silently overwritten, and a path that doesn't exist on the target
+machine is imported but flagged with the command to fix it.
+
+config v3, and `sdcfg migrate` walks v1 → v2 → v3 one step at a time.
+
 ## what's new in 8.0.1
 
 `sd adapt` didn't work. the shell wrapper has a literal list of the read-only verbs
@@ -348,7 +393,7 @@ copying.
 so the installer is pinned to its own tag now:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v8.0.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v9.0.0/install.sh | bash
 ```
 
 a tagged path never changes, so the cache is always correct for the version it
@@ -666,7 +711,7 @@ forward. `update --to` says so before it does it, and the way back is the
 installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v8.0.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v9.0.0/install.sh | bash
 ```
 
 it also checks on its own, at most **once a day**, and only when you're sitting

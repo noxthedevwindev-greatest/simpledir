@@ -374,22 +374,39 @@ v1() { env SIMPLEDIR_CONFIG_DIR="$V1" "$CFG" "$@"; }
 
 out=$(v1 migrate --dry-run)
 has "migrate --dry-run says would"        "would migrate"     "$out"
-has "migrate --dry-run shows the version" "version 1 -> 2"    "$out"
+has "migrate --dry-run shows the version" "version 1 -> 3"    "$out"
 check "migrate --dry-run wrote nothing"   0 grep -q '"version": 1' "$V1/config.json"
 check "migrate --dry-run made no history" 0 bash -c "! test -e '$V1/history.json'"
 
 out=$(v1 migrate)
-has "migrate reports the versions"        "version 1 -> 2"    "$out"
+has "migrate reports the versions"        "version 1 -> 3"    "$out"
 has "migrate says the aliases survived"   "aliases kept"      "$out"
 has "migrate names the backup"            "backup:"           "$out"
-check "migrate wrote version 2"           0 grep -q '"version": 2' "$V1/config.json"
+check "migrate wrote the current version" 0 grep -q '"version": 3' "$V1/config.json"
 check "migrate created the history file"  0 test -f "$V1/history.json"
 check "migrate kept a backup"             0 bash -c "compgen -G '$V1/config.json.bak.*' >/dev/null"
 check "migrate kept every alias"          0 grep -q "\"dots\": \"$HOME\"" "$V1/config.json"
 check "the alias still jumps"             0 env SIMPLEDIR_CONFIG_DIR="$V1" "$SD" print dots
-contains "migrate says nothing to do next time" "already version 2" "$(v1 migrate)"
+contains "migrate says nothing to do next time" "already version 3" "$(v1 migrate)"
 check "migrate is idempotent"             0 v1 migrate
-check "a second migrate changes nothing"  0 grep -q '"version": 2' "$V1/config.json"
+check "a second migrate changes nothing"  0 grep -q '"version": 3' "$V1/config.json"
+V1b=$(mktemp -d)
+printf '{"version": 1, "aliases": {"e": "%s"}}' "$HOME" > "$V1b/config.json"
+has "migrate --dry-run mentions tags"    "tags" \
+  "$(env SIMPLEDIR_CONFIG_DIR="$V1b" "$CFG" migrate --dry-run)"
+rm -rf "$V1b"
+check "migrate left tags alone until you use one" 0 bash -c \
+  "! grep -q '\"tags\"' '$V1/config.json'"
+
+# a v2 config already has "history"; migrating it must not claim to add it again
+V2=$(mktemp -d)
+printf '{"version": 2, "history": true, "aliases": {"d": "%s"}}' "$HOME" > "$V2/config.json"
+out=$(env SIMPLEDIR_CONFIG_DIR="$V2" "$CFG" migrate 2>&1)
+has "a v2 config migrates"       "version 2 -> 3" "$out"
+lacks "a v2 config skips history" "created"       "$out"
+has "a v2 config gets tags"      "tags"          "$out"
+check "v2 -> v3 keeps the alias"  0 grep -q '"d"' "$V2/config.json"
+rm -rf "$V2"
 
 V9=$(mktemp -d)
 printf '{"version": 9, "aliases": {}}' > "$V9/config.json"
@@ -441,6 +458,206 @@ json.dump(c, open(p, "w"))
 EOF
 fr2 "$SD" print q >/dev/null
 check '"history": false stops the log'   0 bash -c "! test -e '$FR2/history.json'"
+
+# --- tags: named groups of aliases -------------------------------------------
+# A tag is a group of *names*, not paths, so renaming or rebinding an alias
+# updates every tag that mentions it and `sd @work dots` can never disagree with
+# `sd dots` about where dots is.
+TG=$(mktemp -d); mkdir -p "$TG/cfg" "$TG/a" "$TG/b" "$TG/c"
+tg() { env SIMPLEDIR_CONFIG_DIR="$TG/cfg" "$@"; }
+tg "$CFG" add work "$TG/a" >/dev/null
+tg "$CFG" add play "$TG/b" >/dev/null
+tg "$CFG" add dots "$TG/c" >/dev/null
+
+contains "tag with nothing says how to start" "no tags yet" tg "$CFG" tag
+contains "tag explains the shape"          "sdcfg tag @work dots" tg "$CFG" tag
+contains "tag adds several at once"        "work play" tg "$CFG" tag @life work play
+contains "adding again says so"            "already had" tg "$CFG" tag @life work
+contains "a second tag is separate"        "@work" tg "$CFG" tag @work dots
+contains "tag lists its members"           "work  play" tg "$CFG" tag
+check   "tags are in the config"           0 grep -q '"tags"' "$TG/cfg/config.json"
+check   "a tag is stored with its @"       0 grep -q '"@life"' "$TG/cfg/config.json"
+
+# the @ is optional when creating, so both spellings land in one place
+tg "$CFG" tag bare work >/dev/null
+check "the @ is optional" 0 grep -q '"@bare"' "$TG/cfg/config.json"
+
+# a tag may only hold names that exist
+check "a tag refuses a missing alias"  1 tg "$CFG" tag @bad nosuchthing
+contains "and names the missing one"   "nosuchthing" "$(tg "$CFG" tag @bad nosuchthing 2>&1)"
+contains "and says how to bind it"     "sdcfg add"    "$(tg "$CFG" tag @bad nosuchthing 2>&1)"
+check "and created nothing"            0 bash -c "! grep -q '@bad' '$TG/cfg/config.json'"
+
+# resolution through a tag
+contains "sd @tag lists it"        "@life" tg "$SD" @life
+contains "sd @tag shows a member"  "work"  tg "$SD" @life
+check   "sd @tag <name> jumps"     0 bash -c \
+  "env SIMPLEDIR_CONFIG_DIR='$TG/cfg' '$SD' @life work | grep -q '$TG/a'"
+check   "sd @tag rejects a non-member" 1 tg "$SD" @life nosuchthing
+contains "and lists what it has"    "it has: work play" "$(tg "$SD" @life nosuchthing 2>&1)"
+contains "and suggests adding it"   "sdcfg tag @life"  "$(tg "$SD" @life nosuchthing 2>&1)"
+check   "an unknown tag fails"      1 tg "$SD" @nope
+contains "and lists the ones you have" "@life" "$(tg "$SD" @nope 2>&1)"
+contains "an unknown tag on empty"  "you have no tags" "$(env SIMPLEDIR_CONFIG_DIR=$(mktemp -d) "$SD" @nope 2>&1)"
+
+# removing, and dropping the whole tag
+tg "$CFG" tag @life --remove play >/dev/null
+lacks   "a removed member is gone"   "play" tg "$CFG" tag
+contains "removing something absent says so" "isn't in @life" "$(tg "$CFG" tag @life --remove play)"
+tg "$CFG" tag @bare --drop >/dev/null
+check   "an emptied tag is dropped"  0 bash -c "! grep -q '@bare' '$TG/cfg/config.json'"
+
+# listing, with and without a filter
+contains "ls shows which tags an alias is in" "[life]" tg "$SD" ls
+contains "ls @tag filters"                       "work" tg "$SD" ls @life
+lacks   "ls @tag leaves others out"             "dots" tg "$SD" ls @life
+contains "ls @tag works with a query"  "work" tg "$SD" ls @life wor
+check   "ls --names stays one per line" 0 bash -c \
+  "[[ \$(env SIMPLEDIR_CONFIG_DIR='$TG/cfg' '$SD' ls --names | wc -l) -eq 3 ]]"
+check   "ls --json keeps the config shape" 0 bash -c \
+  "! env SIMPLEDIR_CONFIG_DIR='$TG/cfg' '$SD' ls --json | grep -q 'tags'"
+check   "an unknown tag on ls fails"   1 tg "$SD" ls @nope
+rm -rf "$TG"
+
+# --- project aliases ----------------------------------------------------------
+# A global `src` is wrong for every project that has its own. So a project can
+# carry its own aliases in a .simpledir.json beside it, and the project's own
+# name wins while you are inside the tree.
+PJ=$(mktemp -d); mkdir -p "$PJ/cfg" "$PJ/proj/src" "$PJ/proj/docs" "$PJ/proj/a/b/c" "$PJ/elsewhere"
+pj() { env SIMPLEDIR_CONFIG_DIR="$PJ/cfg" "$@"; }
+check "project with no file says so" 1 bash -c \
+  "cd '$PJ/elsewhere' && env SIMPLEDIR_CONFIG_DIR='$PJ/cfg' '$CFG' project --list"
+contains "and how to start" "project add" "$(cd "$PJ/proj" && env SIMPLEDIR_CONFIG_DIR="$PJ/cfg" "$CFG" project --list 2>&1 || true)"
+
+# Never cd the runner itself: these tests rm -rf their own directories, and a
+# runner left standing in a deleted directory fails every command after it with
+# "getcwd: cannot access parent directories".
+pj_in() { ( cd "$PJ/proj" && env SIMPLEDIR_CONFIG_DIR="$PJ/cfg" "$@" ); }
+contains "project add binds"   "src -> $PJ/proj/src" "$(pj_in "$CFG" project add src src)"
+contains "project add says where" ".simpledir.json" "$(pj_in "$CFG" project add docs docs)"
+check   "the file exists"     0 test -f "$PJ/proj/.simpledir.json"
+check   "paths are stored relative" 0 grep -q '"src": "src"' "$PJ/proj/.simpledir.json"
+check   "the file is plain json"    0 python3 -c "import json;json.load(open('$PJ/proj/.simpledir.json'))"
+check   "a project alias resolves" 0 bash -c \
+  "cd '$PJ/proj' && env SIMPLEDIR_CONFIG_DIR='$PJ/cfg' '$SD' print src | grep -q '$PJ/proj/src'"
+
+# from anywhere inside the tree, including four levels down
+check "it resolves from a subdirectory" 0 bash -c \
+  "cd '$PJ/proj/a/b/c' && env SIMPLEDIR_CONFIG_DIR='$PJ/cfg' '$SD' print src | grep -q '$PJ/proj/src'"
+check "it resolves from the project root" 0 bash -c \
+  "cd '$PJ/proj' && env SIMPLEDIR_CONFIG_DIR='$PJ/cfg' '$SD' print src | grep -q '$PJ/proj/src'"
+
+# a global alias of the same name applies outside, and loses inside
+pj "$CFG" add src "$PJ/elsewhere" >/dev/null
+check "the global one applies outside" 0 bash -c \
+  "cd '$PJ/elsewhere' && env SIMPLEDIR_CONFIG_DIR='$PJ/cfg' '$SD' print src | grep -q '$PJ/elsewhere'"
+check "the project's one wins inside"  0 bash -c \
+  "cd '$PJ/proj' && env SIMPLEDIR_CONFIG_DIR='$PJ/cfg' '$SD' print src | grep -q '$PJ/proj/src'"
+check "prefix works inside a project"  0 bash -c \
+  "cd '$PJ/proj' && env SIMPLEDIR_CONFIG_DIR='$PJ/cfg' '$SD' print sr | grep -q '$PJ/proj/src'"
+
+# refusing a duplicate, and refusing to write in $HOME
+check "a duplicate needs --force" 1 bash -c \
+  "cd '$PJ/proj' && env SIMPLEDIR_CONFIG_DIR='$PJ/cfg' '$CFG' project add src src"
+contains "and says so" "already in" "$(cd "$PJ/proj" && pj "$CFG" project add src src 2>&1 || true)"
+check "--force overwrites" 0 bash -c \
+  "cd '$PJ/proj' && env SIMPLEDIR_CONFIG_DIR='$PJ/cfg' '$CFG' project add --force src docs"
+check "and the file says so" 0 grep -q '"src": "docs"' "$PJ/proj/.simpledir.json"
+contains "project rm removes" "removed src" "$(pj_in "$CFG" project rm src)"
+check "and it is gone" 0 bash -c "! grep -q '\"src\"' '$PJ/proj/.simpledir.json'"
+check "rm of an unknown name fails" 1 bash -c \
+  "cd '$PJ/proj' && env SIMPLEDIR_CONFIG_DIR='$PJ/cfg' '$CFG' project rm nosuchthing"
+check "project needs a real verb" 2 bash -c \
+  "cd '$PJ/proj' && env SIMPLEDIR_CONFIG_DIR='$PJ/cfg' '$CFG' project nonsense"
+check "project add needs a name" 2 bash -c \
+  "cd '$PJ/proj' && env SIMPLEDIR_CONFIG_DIR='$PJ/cfg' '$CFG' project add"
+
+# refusing to create one in $HOME, which would make every alias everywhere local
+HOMEDIR=$(mktemp -d)
+check "no project file in your home" 1 bash -c \
+  "cd '$HOMEDIR' && HOME='$HOMEDIR' env SIMPLEDIR_CONFIG_DIR='$PJ/cfg' '$CFG' project add home ."
+contains "and it explains why" "home directory" \
+  "$(cd "$HOMEDIR" && HOME="$HOMEDIR" env SIMPLEDIR_CONFIG_DIR="$PJ/cfg" "$CFG" project add home . 2>&1 || true)"
+check "and it wrote nothing" 0 bash -c "! test -e '$HOMEDIR/.simpledir.json'"
+
+# a broken project file must not break every alias
+printf 'not json' > "$PJ/proj/.simpledir.json"
+check "a broken project file is survivable" 0 bash -c \
+  "cd '$PJ/proj' && env SIMPLEDIR_CONFIG_DIR='$PJ/cfg' '$SD' print src | grep -q '$PJ/elsewhere'"
+check "project --list reports it" 1 bash -c \
+  "cd '$PJ/proj' && env SIMPLEDIR_CONFIG_DIR='$PJ/cfg' '$CFG' project --list"
+rm -rf "$PJ" "$HOMEDIR"
+
+# --- export / adopt -----------------------------------------------------------
+# Absolute paths are no use on another machine. Exporting writes $HOME as `~`,
+# which is the one convention everything else already understands.
+PO=$(mktemp -d); mkdir -p "$PO/cfg" "$PO/home/Projects/one" "$PO/home/Downloads"
+po() { env HOME="$PO/home" SIMPLEDIR_CONFIG_DIR="$1" "${@:2}"; }
+po "$PO/cfg" "$CFG" add one "$PO/home/Projects/one" >/dev/null
+po "$PO/cfg" "$CFG" add dl "$PO/home/Downloads" >/dev/null
+po "$PO/cfg" "$CFG" add sys /tmp >/dev/null
+po "$PO/cfg" "$CFG" tag @life one dl >/dev/null
+
+contains "export to stdout" '"one"' bash -c \
+  "env HOME='$PO/home' SIMPLEDIR_CONFIG_DIR='$PO/cfg' '$CFG' export"
+check "home paths become ~" 0 bash -c \
+  "env HOME='$PO/home' SIMPLEDIR_CONFIG_DIR='$PO/cfg' '$CFG' export | grep -q '\"~/Projects/one\"'"
+check "paths outside home stay absolute" 0 bash -c \
+  "env HOME='$PO/home' SIMPLEDIR_CONFIG_DIR='$PO/cfg' '$CFG' export | grep -q '\"/tmp\"'"
+check "export carries the tags" 0 bash -c \
+  "env HOME='$PO/home' SIMPLEDIR_CONFIG_DIR='$PO/cfg' '$CFG' export | grep -q '@life'"
+check "export says the current version" 0 bash -c \
+  "env HOME='$PO/home' SIMPLEDIR_CONFIG_DIR='$PO/cfg' '$CFG' export | grep -q '\"version\": 3'"
+
+po "$PO/cfg" "$CFG" export "$PO/portable.json" >/dev/null
+check "export writes a file" 0 test -f "$PO/portable.json"
+contains "and says how to adopt it" "adopt it elsewhere" "$(po "$PO/cfg" "$CFG" export "$PO/p2.json")"
+
+# adopting on a "different machine"
+mkdir -p "$PO/other"
+contains "adopt reports what it added" "added 3" "$(po "$PO/other" "$CFG" adopt "$PO/portable.json")"
+check "~ expanded on the way in" 0 bash -c \
+  "env HOME='$PO/home' SIMPLEDIR_CONFIG_DIR='$PO/other' '$SD' print one | grep -q '$PO/home/Projects/one'"
+check "the tags came too" 0 bash -c \
+  "env HOME='$PO/home' SIMPLEDIR_CONFIG_DIR='$PO/other' '$SD' ls @life | grep -q 'one'"
+contains "re-adopting says nothing to do" "nothing to do" "$(po "$PO/other" "$CFG" adopt "$PO/portable.json")"
+contains "adopting again is harmless"     "unchanged"  "$(po "$PO/other" "$CFG" adopt "$PO/portable.json")"
+
+# a differing name is reported, not silently overwritten
+po "$PO/other" "$CFG" add --force dl /var >/dev/null
+check "dl really changed first" 0 bash -c \
+  "env HOME='$PO/home' SIMPLEDIR_CONFIG_DIR='$PO/other' '$SD' print dl | grep -q '/var'"
+out=$(po "$PO/other" "$CFG" adopt "$PO/portable.json" 2>&1)
+contains "a conflict is reported"   "already existed with a different path" "$out"
+contains "and says how to force it" "--force"                              "$out"
+check   "and it was left alone"     0 bash -c \
+  "env HOME='$PO/home' SIMPLEDIR_CONFIG_DIR='$PO/other' '$SD' print dl | grep -q '/var'"
+po "$PO/other" "$CFG" adopt --force "$PO/portable.json" >/dev/null
+check   "--force takes the imported one" 0 bash -c \
+  "env HOME='$PO/home' SIMPLEDIR_CONFIG_DIR='$PO/other' '$SD' print dl | grep -q '$PO/home/Downloads'"
+
+# a path that doesn't exist here is imported but flagged
+python3 - "$PO/portable.json" <<'PYEOF'
+import json, sys, pathlib
+p = pathlib.Path(sys.argv[1])
+d = json.loads(p.read_text())
+d["aliases"]["gone"] = "~/definitely/not/here"
+p.write_text(json.dumps(d))
+PYEOF
+mkdir -p "$PO/third"
+out=$(po "$PO/third" "$CFG" adopt "$PO/portable.json" 2>&1)
+contains "a missing target is flagged" "don't exist here" "$out"
+contains "and is still imported"      "gone"            "$out"
+contains "with the fix to hand"       "sdcfg add --force" "$out"
+
+check "adopt needs a file"        2 po "$PO/third" "$CFG" adopt
+contains "and says how to make one" "sdcfg export" "$(po "$PO/third" "$CFG" adopt 2>&1 || true)"
+check "adopt on a missing file fails" 1 po "$PO/third" "$CFG" adopt /nonexistent/config.json
+printf 'not json' > "$PO/junk.json"
+check "adopt rejects junk"        1 po "$PO/third" "$CFG" adopt "$PO/junk.json"
+printf '{"no":"aliases"}' > "$PO/noalias.json"
+contains "adopt needs an aliases object" "aliases" "$(po "$PO/third" "$CFG" adopt "$PO/noalias.json" 2>&1 || true)"
+rm -rf "$PO"
 
 # --- sd adapt / sdcfg adapt ---------------------------------------------------
 # The frecency log already knows every directory you go to, including the ones you

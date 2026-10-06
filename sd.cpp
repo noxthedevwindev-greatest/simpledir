@@ -46,7 +46,7 @@
 namespace fs = std::filesystem;
 
 #ifndef VERSION
-#define VERSION "8.0.1"
+#define VERSION "9.0.0"
 #endif
 
 // The one line this release is about, shown by `--version`. A number on its own
@@ -54,10 +54,10 @@ namespace fs = std::filesystem;
 // test suite builds stub binaries with -DVERSION, and a TAGLINE that only exists
 // when VERSION does not would leave those stubs uncompilable.
 #ifndef TAGLINE
-#define TAGLINE "the wrapper forwards every read-only verb"
+#define TAGLINE "tags, per-project aliases, and configs that travel"
 #endif
 
-#define CONFIG_VERSION 2
+#define CONFIG_VERSION 3
 
 namespace {
 
@@ -72,6 +72,10 @@ constexpr int VISIT_THROTTLE = 60;
 // stop tracking a directory once it fades below this, and keep at most this many
 constexpr double FLOOR = 0.02;
 constexpr size_t MAX_HISTORY = 500;
+
+// A project carries its own aliases in this file, beside the project, so it can
+// be committed and shared.
+const std::string PROJECT_FILE = ".simpledir.json";
 
 const std::string MOVE = "sd";
 const std::string MOVE_ID = "sd";
@@ -594,7 +598,30 @@ struct Config {
   int version = 1;
   bool history = true;
   std::map<std::string, std::string> aliases;
+  // A tag is a named group of alias names, so `sd @work` means "the directories I
+  // use for work" and `sd @work dots` jumps to one of them. Ordered, because the
+  // order you added them in is the order you want to see them in.
+  std::vector<std::pair<std::string, std::vector<std::string>>> tags;
 };
+
+const std::string TAG_PREFIX = "@";
+
+// tags are stored as @name so a tag can never collide with an alias that happens
+// to start with an @, and so `sd @work` reads the same in the config as on screen
+std::string tag_key(const std::string& name) {
+  return starts_with(name, TAG_PREFIX) ? name : TAG_PREFIX + name;
+}
+
+std::string tag_label(const std::string& key) {
+  return starts_with(key, TAG_PREFIX) ? key.substr(1) : key;
+}
+
+const std::vector<std::string>* find_tag(const Config& cfg, const std::string& name) {
+  std::string key = tag_key(name);
+  for (const auto& [k, members] : cfg.tags)
+    if (k == key) return &members;
+  return nullptr;
+}
 
 JsonPtr config_json(const Config& cfg) {
   auto node = Json::make_obj();
@@ -603,6 +630,15 @@ JsonPtr config_json(const Config& cfg) {
   auto aliases = Json::make_obj();
   for (const auto& [name, path] : cfg.aliases) aliases->set(name, Json::make_str(path));
   node->set("aliases", aliases);
+  if (!cfg.tags.empty()) {
+    auto tags = Json::make_obj();
+    for (const auto& [key, members] : cfg.tags) {
+      auto list = Json::make_arr();
+      for (const std::string& member : members) list->arr.push_back(Json::make_str(member));
+      tags->set(key, list);
+    }
+    node->set("tags", tags);
+  }
   return node;
 }
 
@@ -638,6 +674,21 @@ Config load_config() {
                                   "  expected: {\"version\": 1, \"aliases\": {\"name\": \"/path\"}}");
   for (const auto& [name, value] : aliases->obj) {
     if (value->is_str()) cfg.aliases[name] = value->str;
+  }
+  // "tags" is optional: a v1 or v2 config has none, and that is not an error
+  if (JsonPtr tags = root->get("tags")) {
+    if (tags->is_obj()) {
+      for (const auto& [key, value] : tags->obj) {
+        if (!value->is_arr()) continue;
+        std::vector<std::string> members;
+        for (const JsonPtr& item : value->arr)
+          if (item && item->is_str()) members.push_back(item->str);
+        if (!members.empty()) cfg.tags.emplace_back(key, members);
+      }
+    } else if (!tags->is_obj()) {
+      // nothing to do: a malformed tag is worse than no tag, but refusing to load
+      // the aliases would be worse still
+    }
   }
   return cfg;
 }
@@ -811,6 +862,52 @@ std::string unknown_alias_error(const std::string& alias, const Config& cfg) {
 // Turn `name` or `name/sub/dir` into an existing absolute directory. Suffixes
 // cost nothing to support and turn a flat map into something you can navigate
 // deeply: `sd dots/src` is `<dots>/src`.
+struct Project {
+  std::string dir;                            // absolute, where the file lives
+  std::map<std::string, std::string> aliases; // name -> stored value
+};
+
+Project load_project(const std::string& dir) {
+  Project out;
+  out.dir = dir;
+  std::string file = dir + "/" + PROJECT_FILE;
+  // Absent is empty, not broken: the first `sdcfg project add` in a directory has
+  // nothing to read. Reporting "not valid JSON" for a file that doesn't exist was
+  // the first thing this command ever did.
+  if (!path_exists(file)) return out;
+  JsonPtr root;
+  try {
+    root = json_parse(read_file(file));
+  } catch (const UserError&) {
+    throw UserError(file + " is not valid JSON.\n  fix it by hand, or move it aside: mv " + file +
+                    " " + file + ".bak");
+  }
+  if (!root || !root->is_obj()) throw UserError(file + " needs an \"aliases\" object");
+  JsonPtr aliases = root->get("aliases");
+  if (!aliases || !aliases->is_obj())
+    throw UserError(file + " needs an \"aliases\" object, even if it is empty:\n"
+                    "  {\"aliases\": {}}");
+  for (const auto& [name, value] : aliases->obj) {
+    if (value->is_str()) out.aliases[name] = value->str;
+  }
+  return out;
+}
+
+void save_project(const Project& project) {
+  auto root = Json::make_obj();
+  root->set("version", Json::make_num(1));
+  auto aliases = Json::make_obj();
+  for (const auto& [name, stored] : project.aliases) aliases->set(name, Json::make_str(stored));
+  root->set("aliases", aliases);
+  write_atomic(project.dir + "/" + PROJECT_FILE, json_dump(root) + "\n");
+}
+
+// project aliases are defined further down, with the commands that edit them
+std::string find_project_dir();
+struct Project;
+Project load_project(const std::string& dir);
+std::string resolve_project_path(const std::string& stored, const std::string& project_dir);
+
 std::string resolve(const std::string& spec, const Config& cfg) {
   std::string name = spec;
   std::string suffix;
@@ -825,18 +922,56 @@ std::string resolve(const std::string& spec, const Config& cfg) {
     throw UserError("'" + spec + "' isn't an alias, it's a path\n"
                     "  bind it first: " + CONFIG + " add <name> " + spec);
 
-  std::string key = name;
-  if (!cfg.aliases.count(name)) {
-    // zoxide-style: a unique prefix is good enough. `sd hy` finds `hypr`, but
-    // `sd h` with two candidates still fails and says so.
-    std::vector<std::string> matches;
-    for (const auto& [candidate, path] : cfg.aliases) {
-      (void)path;
-      if (starts_with(candidate, name)) matches.push_back(candidate);
+  // A project can hold its own aliases in a .simpledir.json beside it, and those
+  // only exist while you are somewhere inside that tree. The project's own name
+  // wins while you are inside it, the way a local .env or a direnv does, and the
+  // global one applies everywhere else. Same name, two meanings, no configuration
+  // to say so -- which is the entire reason this file exists.
+  std::string project_dir = find_project_dir();
+  std::map<std::string, std::string> project_aliases;
+  if (!project_dir.empty()) {
+    try {
+      project_aliases = load_project(project_dir).aliases;
+    } catch (const UserError&) {
+      project_aliases.clear();  // a broken project file must not break every alias
     }
-    std::sort(matches.begin(), matches.end());
+  }
+
+  std::string key = name;
+  std::string target;
+  bool found = false;
+
+  // 1. the project's own name, while you are inside it
+  auto project_it = project_aliases.find(name);
+  if (project_it != project_aliases.end()) {
+    target = resolve_project_path(project_it->second, project_dir);
+    found = true;
+  }
+  // 2. the global name
+  if (!found && cfg.aliases.count(name)) {
+    target = as_stored(cfg.aliases.at(name));
+    found = true;
+  }
+
+  if (!found) {
+    // zoxide-style: a unique prefix is good enough. `sd hy` finds `hypr`, but
+    // `sd h` with two candidates still fails and says so. Each pool is tried on
+    // its own, so a project alias is never made ambiguous by a global one.
+    auto prefix_in = [&](const std::map<std::string, std::string>& pool,
+                         std::vector<std::string>& hits) {
+      for (const auto& [candidate, value] : pool) {
+        (void)value;
+        if (starts_with(candidate, name)) hits.push_back(candidate);
+      }
+      std::sort(hits.begin(), hits.end());
+    };
+    std::vector<std::string> matches;
+    prefix_in(project_aliases, matches);
+    if (matches.empty()) prefix_in(cfg.aliases, matches);
     if (matches.size() == 1) {
       key = matches[0];
+      target = project_aliases.count(key) ? resolve_project_path(project_aliases.at(key), project_dir)
+                                         : as_stored(cfg.aliases.at(key));
     } else if (matches.size() > 1) {
       throw UserError("'" + name + "' matches several aliases: " + join(matches, " ") +
                       "\n  use the whole name, or " + MOVE + " ls");
@@ -845,7 +980,6 @@ std::string resolve(const std::string& spec, const Config& cfg) {
     }
   }
 
-  std::string target = as_stored(cfg.aliases.at(key));
   if (!suffix.empty()) {
     std::error_code ec;
     fs::path joined = fs::path(target) / suffix;
@@ -974,6 +1108,473 @@ void nudge();
 
 // defined with the import commands further down; the proposals need it too
 std::string name_for(const std::string& path, const std::set<std::string>& taken);
+// defined with the config commands further down
+void require_dir(const std::string& path);
+
+// -------------------------------------------------------- export and import
+//
+// A config full of absolute paths is no use on another machine, and a config full
+// of `~` is no use to anything that isn't your shell. So an exported config writes
+// $HOME as `~`, which is the one convention every shell, every dotfile manager and
+// every other tool already understands. Import expands it again.
+//
+// Nothing else is rewritten. A path outside $HOME stays absolute because there is
+// nothing portable to say about it, and silently mangling it would be worse.
+
+std::string portable(const std::string& absolute) {
+  std::string home = home_dir();
+  if (home.empty() || home == "/") return absolute;
+  if (absolute == home) return "~";
+  if (starts_with(absolute, home + "/")) return "~" + absolute.substr(home.size());
+  return absolute;
+}
+
+int cmd_export(const Args& args) {
+  Config cfg = load_config();
+  auto node = config_json(cfg);
+  // rewrite both the aliases and anything inside them
+  auto aliases = node->get("aliases");
+  if (aliases && aliases->is_obj()) {
+    for (const auto& [name, value] : aliases->obj) {
+      if (value->is_str()) value->str = portable(value->str);
+    }
+  }
+  node->set("version", Json::make_num(CONFIG_VERSION));
+  node->set("exported_by", Json::make_str(MOVE + " " + VERSION));
+  // tags hold names, not paths, so they travel as they are
+  std::string text = json_dump(node) + "\n";
+
+  std::string out = args.word(0);
+  if (out.empty()) {
+    std::cout << text;
+    return 0;
+  }
+  if (out == "-") {
+    std::cout << text;
+    return 0;
+  }
+  std::string target = abspath(out);
+  write_atomic(target, text);
+  size_t portable_count = 0;
+  for (const auto& [name, path] : cfg.aliases)
+    if (portable(as_stored(path)) != as_stored(path)) portable_count++;
+  std::cout << "wrote " << cfg.aliases.size() << " aliases to " << target << "\n";
+  if (portable_count)
+    std::cout << "  " << portable_count << " under your home were written as ~/ so they travel\n";
+  std::cout << "  adopt it elsewhere with: " << CONFIG << " adopt " << shell_quote(target) << "\n";
+  return 0;
+}
+
+int cmd_adopt(const Args& args) {
+  std::string from = args.word(0);
+  if (from.empty())
+    throw UsageError("which file? " + CONFIG + " adopt <file>\n"
+                     "  make one to import: " + CONFIG + " export <file>");
+  std::string path = abspath(from);
+  if (!path_exists(path)) die("no such file: " + path);
+
+  JsonPtr root;
+  try {
+    root = json_parse(read_file(path));
+  } catch (const UserError& err) {
+    die(path + " is not valid JSON (" + err.what() + ")");
+  }
+  if (!root || !root->is_obj()) die(path + " needs to be a config object");
+  JsonPtr aliases = root->get("aliases");
+  if (!aliases || !aliases->is_obj()) die(path + " has no \"aliases\" object");
+
+  Config cfg = load_config();
+  std::vector<std::string> added, replaced, skipped, missing;
+  for (const auto& [name, value] : aliases->obj) {
+    if (!value->is_str()) {
+      skipped.push_back(name);
+      continue;
+    }
+    std::string target = as_stored(value->str);  // expands ~ and makes it absolute
+    bool gone = !is_dir(target);
+    if (gone) missing.push_back(name + " -> " + target);
+    if (cfg.aliases.count(name)) {
+      if (as_stored(cfg.aliases.at(name)) == target) {
+        skipped.push_back(name);
+        continue;
+      }
+      if (!args.has("force")) {
+        replaced.push_back(name);
+        continue;
+      }
+      cfg.aliases[name] = target;
+      continue;
+    }
+    cfg.aliases[name] = target;
+    added.push_back(name);
+  }
+  // tags travel with the aliases: a group of names is meaningless without them
+  std::vector<std::string> tags_added;
+  if (JsonPtr tags = root->get("tags")) {
+    if (tags->is_obj()) {
+      for (const auto& [key, value] : tags->obj) {
+        if (!value->is_arr()) continue;
+        std::vector<std::string> members;
+        for (const JsonPtr& item : value->arr) {
+          if (!item || !item->is_str()) continue;
+          // only keep names that actually arrived, so a tag can't end up holding
+          // aliases that aren't there
+          if (cfg.aliases.count(item->str)) members.push_back(item->str);
+        }
+        if (members.empty()) continue;
+        auto slot = std::find_if(cfg.tags.begin(), cfg.tags.end(),
+                                 [&](const std::pair<std::string, std::vector<std::string>>& t) {
+                                   return t.first == key;
+                                 });
+        if (slot == cfg.tags.end()) {
+          cfg.tags.emplace_back(key, members);
+          tags_added.push_back(key);
+        } else {
+          for (const std::string& m : members) {
+            if (std::find(slot->second.begin(), slot->second.end(), m) == slot->second.end())
+              slot->second.push_back(m);
+          }
+        }
+      }
+    }
+  }
+
+  if (!added.empty() || !args.has("dry-run")) {
+    if (args.has("dry-run")) {
+      std::cout << "would add " << added.size() << ", replace " << replaced.size() << "\n";
+    } else {
+      save_config(cfg);
+      std::cout << "imported from " << path << "\n";
+    }
+  }
+  if (!tags_added.empty()) std::cout << "  tags " << join(tags_added, " ") << "\n";
+  if (!added.empty()) std::cout << "  added " << added.size() << ": " << join(added, " ") << "\n";
+  if (!replaced.empty())
+    std::cout << "  " << replaced.size() << " already existed with a different path: "
+              << join(replaced, " ")
+              << "\n  overwrite: " << CONFIG << " import --force " << shell_quote(path) << "\n";
+  if (!skipped.empty()) std::cout << "  " << skipped.size() << " unchanged\n";
+  if (!missing.empty()) {
+    std::cout << "  " << missing.size() << " point at directories that don't exist here:\n";
+    for (const std::string& line : missing) std::cout << "    " << line << "\n";
+    std::cout << "  they were still imported. bind them properly with: " << CONFIG
+              << " add --force <name> <path>\n";
+  }
+  if (added.empty() && replaced.empty())
+    std::cout << "  nothing to do, your config already matches\n";
+  return 0;
+}
+
+// ------------------------------------------------------------ project aliases
+//
+// A global alias is right for `dots` and wrong for `src`: inside a project, `src`
+// means that project's src, and somewhere else it means something else or nothing.
+// So a project can carry its own aliases in a `.simpledir.json` next to it, and
+// `sd src` finds them anywhere inside that tree.
+//
+// The file is plain json and it goes in the repository, which is the point: it can
+// be committed, shared, and reviewed. Absolute paths would make that useless, so
+// entries are stored relative to the file when they can be, and always resolve
+// against it.
+
+// Walk up from the current directory looking for one. Stops at $HOME, so a stray
+// file in your home directory can't turn every alias everywhere into a project one.
+std::string find_project_dir() {
+  std::error_code ec;
+  fs::path dir = fs::current_path(ec);
+  if (ec) return "";
+  std::string home = home_dir();
+  for (int depth = 0; depth < 64; depth++) {
+    std::error_code sub_ec;
+    fs::path candidate = dir / PROJECT_FILE;
+    if (path_exists(candidate.string())) return dir.string();
+    fs::path parent = dir.parent_path();
+    if (parent == dir || dir.string() == home) break;
+    if (home.size() && dir.string() == home) break;
+    dir = parent;
+    (void)sub_ec;
+  }
+  return "";
+}
+
+// Store a path relative to the project file when it is inside it, so the file can
+// be committed and used on another machine. Anything else stays absolute, because
+// a relative path to somewhere outside the project would be worse than useless.
+std::string store_for_project(const std::string& absolute, const std::string& project_dir) {
+  if (project_dir.empty()) return absolute;
+  std::error_code ec;
+  fs::path rel = fs::path(absolute).lexically_relative(project_dir);
+  std::string text = rel.string();
+  if (!text.empty() && !starts_with(text, "..")) return text;
+  return absolute;
+}
+
+std::string resolve_project_path(const std::string& stored, const std::string& project_dir) {
+  if (starts_with(stored, "~")) return abspath(stored);
+  if (!stored.empty() && stored[0] == '/') return stored;
+  return abspath(project_dir + "/" + stored);
+}
+
+// `sdcfg project` — writes. Everything here edits the nearest file.
+int cmd_project(const Args& args) {
+  std::error_code ec;
+  std::string here = find_project_dir();
+
+  if (args.has("list") || args.words.empty()) {
+    if (here.empty()) {
+      std::cout << "no " << PROJECT_FILE << " here or in any parent directory up to your home.\n"
+                << "  make one: " << CONFIG << " project add <name> <path>\n";
+      return 1;
+    }
+    Project project = load_project(here);
+    std::cout << project.aliases.size()
+              << (project.aliases.size() == 1 ? " alias" : " aliases") << " in "
+              << here << "/" << PROJECT_FILE << ":\n\n";
+    for (const auto& [name, stored] : project.aliases) {
+      std::string target = resolve_project_path(stored, here);
+      std::cout << "  " << name << std::string(12 - std::min<size_t>(12, name.size()), ' ') << target
+                << (is_dir(target) ? "" : "   [missing]") << "\n";
+    }
+    return 0;
+  }
+
+  std::string verb = args.word(0);
+
+  if (verb == "rm" || verb == "remove") {
+    if (here.empty()) die("no " + PROJECT_FILE + " here or in any parent up to your home");
+    Project project = load_project(here);
+    std::string name = args.word(1);
+    if (name.empty()) throw UsageError("which one? " + CONFIG + " project rm <name>");
+    auto it = project.aliases.find(name);
+    if (it == project.aliases.end())
+      throw UserError("'" + name + "' isn't in " + here + "/" + PROJECT_FILE);
+    std::cout << "removed " << name << " -> " << resolve_project_path(it->second, here) << "\n";
+    project.aliases.erase(it);
+    save_project(project);
+    return 0;
+  }
+
+  if (verb != "add") throw UsageError("project takes add, rm or --list");
+
+  std::string name = args.word(1);
+  std::string raw = args.word(2);
+  if (name.empty()) throw UsageError("usage: " + CONFIG + " project add <name> [<path>]");
+  if (raw.empty()) raw = fs::current_path().string();
+  std::string target = abspath(raw);
+  require_dir(target);
+
+  // Creating a file in $HOME would make every alias everywhere a project one, so
+  // refuse it and say where to go instead.
+  std::string home = home_dir();
+  std::error_code dir_ec;
+  std::string cwd = fs::current_path(dir_ec).string();
+  if (cwd == home)
+    die("not writing " + PROJECT_FILE + " in your home directory.\n"
+        "  every alias would then depend on where you stood. cd into the project first.");
+
+  if (here.empty()) here = cwd;
+  Project project = load_project(here);
+  std::string stored = store_for_project(target, here);
+  if (project.aliases.count(name) && !args.has("force")) {
+    std::string old = resolve_project_path(project.aliases.at(name), here);
+    die("'" + name + "' is already in " + here + "/" + PROJECT_FILE + " -> " + old +
+        "\n  overwrite: " + CONFIG + " project add --force " + name + " " + shell_quote(raw));
+  }
+  project.aliases[name] = stored;
+  save_project(project);
+  std::cout << name << " -> " << target << "\n";
+  std::cout << "  stored in " << here << "/" << PROJECT_FILE;
+  if (stored != target) std::cout << " as the relative path \"" << stored << "\", so it travels";
+  std::cout << "\n  " << MOVE << " " << name << " works anywhere under " << here << "\n";
+  return 0;
+}
+
+// ----------------------------------------------------------------------- tags
+//
+// A tag is a named group of alias names: `sd @work` is "the directories I use for
+// work", `sd @work dots` jumps to one of them. It costs one object in the config
+// and it makes a long alias list usable, because you almost never want all of it on
+// screen at once.
+//
+// It is a group of *names*, not paths. The path stays in one place, so renaming or
+// rebinding an alias updates every tag that mentions it, and `sd @work dots` can
+// never disagree with `sd dots` about where dots is.
+
+int cmd_tag(const Args& args) {
+  Config cfg = load_config();
+
+  // no name: show them all
+  if (args.words.empty() || args.has("list")) {
+    if (cfg.tags.empty()) {
+      std::cout << "no tags yet. make one:\n"
+                << "  " << CONFIG << " tag @work dots hypr projects\n"
+                << "then `" << MOVE << " @work` lists that group, and `" << MOVE
+                << " @work dots` jumps to one\n";
+      return 0;
+    }
+    for (const auto& [key, members] : cfg.tags) {
+      std::cout << "  " << key << "  " << members.size() << (members.size() == 1 ? " alias" : " aliases")
+                << "\n";
+      size_t width = 0;
+      for (const std::string& m : members) width = std::max(width, m.size());
+      std::cout << "    ";
+      for (const std::string& m : members) std::cout << m << std::string(width - m.size() + 2, ' ');
+      std::cout << "\n";
+    }
+    return 0;
+  }
+
+  std::string key = tag_key(args.word(0));
+  std::vector<std::string> wanted(args.words.begin() + 1, args.words.end());
+  auto slot = std::find_if(cfg.tags.begin(), cfg.tags.end(),
+                           [&](const std::pair<std::string, std::vector<std::string>>& t) {
+                             return t.first == key;
+                           });
+  std::vector<std::string>* members = slot == cfg.tags.end() ? nullptr : &slot->second;
+
+  if (args.has("remove") || args.has("drop")) {
+    if (slot == cfg.tags.end())
+      die("no tag " + key + ". " + CONFIG + " tag lists the ones you have");
+    if (args.has("drop") && !wanted.empty())
+      die("--drop takes no names. " + CONFIG + " tag --drop " + key + " removes the whole tag");
+    if (args.has("drop")) {
+      std::cout << "  dropped " << key << " (" << slot->second.size()
+                << (slot->second.size() == 1 ? " alias" : " aliases")
+                << ", nothing was unbound)\n";
+      slot->second.clear();
+    }
+    for (const std::string& name : wanted) {
+      auto it = std::find(slot->second.begin(), slot->second.end(), name);
+      if (it == slot->second.end()) {
+        std::cout << "  " << name << " isn't in " << key << "\n";
+        continue;
+      }
+      slot->second.erase(it);
+      std::cout << "  removed " << name << " from " << key << "\n";
+    }
+    // Mutate in place and only erase the element once, by index. Erasing the
+    // whole tag and re-adding `*members` used a pointer into the vector's own
+    // storage, which the erase had already moved: removing `play` from @life
+    // replaced it with @work's contents.
+    bool empty = slot->second.empty();
+    if (empty) cfg.tags.erase(cfg.tags.begin() + (slot - cfg.tags.begin()));
+    save_config(cfg);
+    if (empty) std::cout << key << " is empty now, so it's gone\n";
+    return 0;
+  }
+
+  if (wanted.empty())
+    throw UsageError("which aliases? " + CONFIG + " tag " + key + " <alias>...");
+
+  // a tag can only hold names that exist. Catching it here beats `sd @work dots`
+  // failing later with a confusing message.
+  std::vector<std::string> unknown;
+  for (const std::string& name : wanted)
+    if (!cfg.aliases.count(name)) unknown.push_back(name);
+  if (!unknown.empty()) {
+    std::string msg = key + " holds alias names, and these don't exist: " + join(unknown, " ");
+    msg += "\n  bind them first: " + CONFIG + " add <name> <path>";
+    msg += "\n  or see what you have: " + MOVE + " ls";
+    throw UserError(msg);
+  }
+
+  if (!members) {
+    cfg.tags.emplace_back(key, std::vector<std::string>());
+    members = &cfg.tags.back().second;
+  }
+  std::vector<std::string> added;
+  for (const std::string& name : wanted) {
+    if (std::find(members->begin(), members->end(), name) != members->end()) continue;
+    members->push_back(name);
+    added.push_back(name);
+  }
+  save_config(cfg);
+
+  if (added.empty()) {
+    std::cout << key << " already had all of those\n";
+    return 0;
+  }
+  std::cout << key << " (" << members->size() << (members->size() == 1 ? " alias" : " aliases") << "): "
+            << join(added, " ") << "\n";
+  std::cout << "  " << MOVE << " " << key << "          list them\n"
+            << "  " << MOVE << " " << key << " <alias>  jump to one\n";
+  return 0;
+}
+
+// A tag can be jumped through or listed, so the move half has to understand one
+// before it treats the word as an alias. Split off the tag if there is one, and
+// hand back the member list for the caller to work with.
+bool split_tag(const Args& args, Config& cfg, std::string& tag_name,
+               std::vector<std::string>& members, std::string& rest) {
+  if (args.words.empty()) return false;
+  if (!starts_with(args.words[0], TAG_PREFIX)) return false;
+  tag_name = args.words[0];
+  rest = args.words.size() > 1 ? args.words[1] : "";
+  const std::vector<std::string>* found = nullptr;
+  for (const auto& [key, list] : cfg.tags)
+    if (key == tag_name) found = &list;
+  if (!found) {
+    std::string msg = "no tag " + tag_name + ".";
+    if (cfg.tags.empty())
+      msg += " you have no tags: " + CONFIG + " tag @work dots hypr";
+    else {
+      msg += " you have:";
+      for (const auto& [key, list] : cfg.tags) {
+        (void)list;
+        msg += " " + key;
+      }
+    }
+    throw UserError(msg);
+  }
+  members = *found;
+  return true;
+}
+
+// The members of a tag that exist, in tag order, with their paths.
+std::vector<std::pair<std::string, std::string>> tag_rows(const Config& cfg,
+                                                         const std::vector<std::string>& members) {
+  std::vector<std::pair<std::string, std::string>> out;
+  for (const std::string& name : members) {
+    auto it = cfg.aliases.find(name);
+    if (it == cfg.aliases.end()) continue;  // renamed or removed since it was tagged
+    out.emplace_back(name, it->second);
+  }
+  return out;
+}
+
+int cmd_tag_list(const Config& cfg, const std::string& tag_name,
+                 const std::vector<std::string>& members) {
+  auto rows = tag_rows(cfg, members);
+  if (rows.empty()) {
+    std::cout << tag_name << " has nothing left in it. its aliases were renamed or removed.\n";
+    std::cout << "  drop it: " << CONFIG << " tag --drop " << tag_name << "\n";
+    return 1;
+  }
+  std::string missing;
+  for (const std::string& name : members)
+    if (!cfg.aliases.count(name)) missing += (missing.empty() ? "" : " ") + name;
+
+  size_t width = 0;
+  for (const auto& [name, path] : rows) width = std::max(width, name.size());
+  std::error_code ec;
+  fs::path cwd = fs::current_path(ec);
+  std::cout << rows.size() << (rows.size() == 1 ? " alias" : " aliases") << " in " << tag_name << ":\n\n";
+  for (const auto& [name, path] : rows) {
+    std::string shown = path;
+    if (!ec) {
+      std::string relative = fs::path(path).lexically_relative(cwd).string();
+      if (!relative.empty() && !starts_with(relative, "..")) shown = relative;
+    }
+    bool gone = !is_dir(as_stored(path));
+    std::cout << "  " << name << std::string(width - name.size() + 2, ' ') << shown
+              << (gone ? "   [missing]" : "") << "\n";
+  }
+  if (!missing.empty())
+    std::cout << "\n  " << missing << " no longer exist as aliases. drop them with:\n"
+              << "    " << CONFIG << " tag " << tag_name << " --remove " << missing << "\n";
+  std::cout << "\n  jump to one: " << MOVE << " " << tag_name << " <name>\n";
+  return 0;
+}
 
 // ------------------------------------------------------------------- adapting
 //
@@ -1279,7 +1880,42 @@ int cmd_adapt_apply(const Args& args) {
 int cmd_ls(const Args& args) {
   Config cfg = load_config();
   std::string query = args.word(0);
+
+  // `sd ls @work` is the tag, filtered the same way a name filter is
+  std::string tag_filter;
+  if (starts_with(query, TAG_PREFIX)) {
+    tag_filter = query;
+    query.clear();
+    const std::vector<std::string>* members = nullptr;
+    for (const auto& [key, list] : cfg.tags)
+      if (key == tag_filter) members = &list;
+    if (!members) {
+      std::string msg = "no tag " + tag_filter + ".";
+      if (cfg.tags.empty())
+        msg += " you have no tags: " + CONFIG + " tag @work dots hypr";
+      else {
+        msg += " you have:";
+        for (const auto& [key, list] : cfg.tags) {
+          (void)list;
+          msg += " " + key;
+        }
+      }
+      throw UserError(msg);
+    }
+  }
+
   auto found = rows(cfg, query);
+  if (!tag_filter.empty()) {
+    const std::vector<std::string>* members = nullptr;
+    for (const auto& [key, list] : cfg.tags)
+      if (key == tag_filter) members = &list;
+    std::set<std::string> keep(members->begin(), members->end());
+    found.erase(std::remove_if(found.begin(), found.end(),
+                               [&](const std::tuple<std::string, std::string, bool>& row) {
+                                 return !keep.count(std::get<0>(row));
+                               }),
+                found.end());
+  }
 
   if (args.has("names")) {
     for (const auto& [name, target, missing] : found) {
@@ -1327,8 +1963,18 @@ int cmd_ls(const Args& args) {
       // a path full of ../ is noise, so keep the absolute one
       if (!relative.empty() && !starts_with(relative, "..")) shown = relative;
     }
-    std::cout << name << std::string(width - name.size() + 2, ' ') << shown
-              << (missing ? "   [missing]" : "") << "\n";
+    std::cout << name << std::string(width - name.size() + 2, ' ') << shown;
+    std::vector<std::string> badges;
+    if (missing) badges.push_back("missing");
+    // no badge when you already filtered by that tag: it would just repeat
+    if (tag_filter.empty()) {
+      for (const auto& [key, members] : cfg.tags) {
+        if (std::find(members.begin(), members.end(), name) != members.end())
+          badges.push_back(tag_label(key));
+      }
+    }
+    if (!badges.empty()) std::cout << "   [" << join(badges, " ") << "]";
+    std::cout << "\n";
   }
   nudge();
   return 0;
@@ -1891,8 +2537,10 @@ int cmd_migrate(const Args& args) {
 
   if (args.has("dry-run")) {
     std::cout << "would migrate " << g_config_file << ": version " << found << " -> " << CONFIG_VERSION
-              << "\n  " << cfg.aliases.size() << " aliases kept exactly as they are"
-              << "\n  would add \"history\": true, and create " << g_history_file << "\n";
+              << "\n  " << cfg.aliases.size() << " aliases kept exactly as they are";
+    if (found < 2) std::cout << "\n  would add \"history\": true, and create " << g_history_file;
+    if (found < 3) std::cout << "\n  would add an empty \"tags\" object, for " << CONFIG << " tag";
+    std::cout << "\n";
     return 0;
   }
 
@@ -1902,18 +2550,27 @@ int cmd_migrate(const Args& args) {
 
   cfg.version = CONFIG_VERSION;
   save_config(cfg);
-  if (!path_exists(g_history_file)) {
-    auto root = Json::make_obj();
-    root->set("version", Json::make_num(1));
-    root->set("dirs", Json::make_obj());
-    write_atomic(g_history_file, json_dump(root) + "\n");
+
+  std::vector<std::string> did;
+  if (found < 2) {
+    if (!path_exists(g_history_file)) {
+      auto root = Json::make_obj();
+      root->set("version", Json::make_num(1));
+      root->set("dirs", Json::make_obj());
+      write_atomic(g_history_file, json_dump(root) + "\n");
+    }
+    did.push_back("created " + g_history_file + " (empty), so " + MOVE + " top has something to read");
   }
+  if (found < 3) did.push_back("added an empty \"tags\" object, for " + CONFIG + " tag");
 
   std::cout << "migrated " << g_config_file << ": version " << found << " -> " << CONFIG_VERSION << "\n"
             << "  " << cfg.aliases.size() << " aliases kept as they were\n"
-            << "  backup: " << backup << "\n"
-            << "  created " << g_history_file << " (empty)\n"
-            << "  now `" << MOVE << " top` will remember where you go\n";
+            << "  backup: " << backup << "\n";
+  for (const std::string& line : did) std::cout << "  " << line << "\n";
+  if (found < 2) std::cout << "  now `" << MOVE << " top` will remember where you go\n";
+  if (found < 3)
+    std::cout << "  tags: `" << CONFIG << " tag <name> <alias>...`, then `" << MOVE
+              << " @<name> <alias>`\n";
   return 0;
 }
 
@@ -2571,6 +3228,7 @@ int cmd_init() {
             << "  if [ \"${1-}\" = \"ls\" ] || [ \"${1-}\" = \"i\" ] || [ \"${1-}\" = \"print\" ]"
                " || [ \"${1-}\" = \"top\" ] || [ \"${1-}\" = \"suggest\" ]"
                " || [ \"${1-}\" = \"adapt\" ] || "
+               "([ \"${1:0:1}\" = \"@\" ]) || "
                "([ \"${1:0:1}\" = \"-\" ] && [ \"${1-}\" != \"-\" ]); then\n"
             << "    command " << MOVE << " \"$@\";\n"
             << "    return $?;\n"
@@ -2657,7 +3315,7 @@ int cmd_completions(const std::string& shell) {
               << "complete -o filenames -F _" << MOVE << "_complete " << MOVE << "\n"
               << "\n"
               << "_" << CONFIG << "_complete() {\n"
-              << "  local cur verbs=\"add rm rename import bind forget adapt migrate zoxide prompt edit init "
+              << "  local cur verbs=\"add rm rename import bind tag forget adapt migrate zoxide prompt edit init "
                  "completions update revert releases uninstall doctor\"\n"
               << "  cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
               << "  COMPREPLY=( $(compgen -W \"$verbs\" -- \"$cur\") )\n"
@@ -2912,6 +3570,29 @@ const char* CONFIG_HELP =
     "  replaces the program itself. different things: neither calls the other.\n";
 
 int run_move(const std::vector<std::string>& argv) {
+  // `sd @work` and `sd @work dots` address a tag. Handled before the fast path,
+  // because a tag is never an alias and must never be resolved as one.
+  if (!argv.empty() && starts_with(argv[0], TAG_PREFIX) &&
+      !std::set<std::string>({"--help", "--version"}).count(argv[0])) {
+    Config cfg = load_config();
+    std::string tag_name, rest;
+    std::vector<std::string> members;
+    Args probe;
+    probe.words = argv;
+    if (!split_tag(probe, cfg, tag_name, members, rest))
+      throw UserError("'" + argv[0] + "' isn't a tag. " + CONFIG + " tag lists the ones you have");
+    if (rest.empty()) return cmd_tag_list(cfg, tag_name, members);
+    // `sd @work dots` resolves exactly like `sd dots`, but only inside the tag
+    if (std::find(members.begin(), members.end(), rest) == members.end()) {
+      std::string msg = rest + " isn't in " + tag_name + ".";
+      msg += " it has:";
+      for (const std::string& m : members) msg += " " + m;
+      msg += "\n  add it: " + CONFIG + " tag " + tag_name + " " + rest;
+      throw UserError(msg);
+    }
+    std::cout << jump(rest, cfg, now_seconds()) << "\n";
+    return 0;
+  }
   // fast path: `sd <word>` and `sd --version` are what run on every prompt
   if (argv.size() == 1) {
     if (argv[0] == "--version") {
@@ -2971,7 +3652,8 @@ int run_move(const std::vector<std::string>& argv) {
     return 0;
   }
   static const std::set<std::string> config_verbs = {
-      "add", "rm", "rename", "import", "bind", "adapt", "forget", "migrate", "zoxide", "prompt",
+      "add", "rm", "rename", "import", "bind", "tag", "project", "adapt", "forget", "migrate",
+      "zoxide", "prompt", "export", "adopt",
       "edit", "init", "completions", "update", "revert", "releases", "uninstall", "doctor"};
   if (config_verbs.count(verb)) {
     throw UsageError("'" + verb + "' is not an " + MOVE + " command.\n  did you mean `" + CONFIG +
@@ -2990,7 +3672,8 @@ int run_config(const std::vector<std::string>& argv) {
   Args args = parse_args(rest);
 
   static const std::set<std::string> known = {
-      "add", "rm", "rename", "import", "bind", "adapt", "forget", "migrate", "zoxide", "prompt",
+      "add", "rm", "rename", "import", "bind", "tag", "project", "adapt", "forget", "migrate",
+      "zoxide", "prompt", "export", "adopt",
       "edit", "init", "completions", "update", "revert", "releases", "uninstall", "doctor"};
 
   if (verb == "--version") {
@@ -3016,6 +3699,10 @@ int run_config(const std::vector<std::string>& argv) {
   if (verb == "rename") return cmd_rename(args);
   if (verb == "import") return cmd_import(args);
   if (verb == "bind") return cmd_bind(args);
+  if (verb == "tag") return cmd_tag(args);
+  if (verb == "project") return cmd_project(args);
+  if (verb == "export") return cmd_export(args);
+  if (verb == "adopt") return cmd_adopt(args);
   if (verb == "adapt") return cmd_adapt_apply(args);
   if (verb == "forget") return cmd_forget(args);
   if (verb == "migrate") return cmd_migrate(args);
