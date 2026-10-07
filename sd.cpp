@@ -2506,9 +2506,9 @@ Timing measure(const std::string& self, const std::vector<std::string>& words,
                const std::string& cwd, int runs) {
   std::vector<double> samples;
   samples.reserve(runs);
-  // three warm-up runs: the first exec after a build pays for a cold page cache,
+  // warm up hard: the first few execs after a build pay for a cold page cache,
   // and a benchmark that measures that is measuring the build
-  for (int i = 0; i < 3; i++) time_one(self, words, cwd);
+  for (int i = 0; i < 6; i++) time_one(self, words, cwd);
   for (int i = 0; i < runs; i++) samples.push_back(time_one(self, words, cwd));
   std::sort(samples.begin(), samples.end());
   Timing t;
@@ -2557,9 +2557,16 @@ int cmd_bench(const Args& args) {
       << "  every timing below is a real fork+exec of this binary, median of " << runs
       << " runs,\n  measured on this machine just now. yours will differ.\n\n";
 
-  // The floor first, because without it the rest is unreadable: this is what it
-  // costs to start any process at all on this box, before a single line of this
-  // program runs. An empty C++ program costs exactly the same.
+  // The floor, because without it the rest is unreadable: this is what it costs to
+  // start any process at all on this box, before a single line of this program
+  // runs. An empty C++ program costs exactly the same.
+  //
+  // Measured twice, before and after the cases, and the *faster* of the two is
+  // used. Measuring it only at the start was a bug with visible consequences: the
+  // first measurement absorbs the cold page cache for the binary, and every case
+  // measured afterwards then looks faster than doing nothing at all -- which is
+  // what `sdcfg bench --runs 12` printed, at -0.065 ms for a jump. A benchmark
+  // that reports a jump as cheaper than an empty program is worse than none.
   Timing floor = measure(self, {"--version"}, "", runs);
 
   struct Case {
@@ -2569,15 +2576,15 @@ int cmd_bench(const Args& args) {
   };
   std::vector<Case> cases;
   if (!cfg.aliases.empty())
-    cases.push_back({"sd <alias>", {cfg.aliases.begin()->first}, "the common case: hit an alias"});
-  cases.push_back({"sd ls", {"ls"}, std::to_string(alias_count) + " aliases in the config"});
+    cases.push_back({"sd <alias>", {cfg.aliases.begin()->first}, "the common case"});
+  cases.push_back({"sd ls", {"ls"}, std::to_string(alias_count) + " aliases"});
   if (entries)
-    cases.push_back({"sd top", {"top"}, std::to_string(entries) + " dirs in the frecency log"});
+    cases.push_back({"sd top", {"top"}, std::to_string(entries) + " dirs remembered"});
   if (entries)
-    cases.push_back({"sd print <miss>", {"print", "nosuchthingxyz"}, "the frecency scan, worst case"});
-  cases.push_back({"sd doctor", {"doctor"}, "every check it knows how to do"});
+    cases.push_back({"sd print <miss>", {"print", "nosuchthingxyz"}, "frecency scan, worst case"});
+  cases.push_back({"sd doctor", {"doctor"}, "every check it can do"});
 
-  char row[320];
+  char row[768];  // a table row, or the paragraph underneath it
   std::snprintf(row, sizeof row, "  %-18s %10s %13s %11s   %s\n", "case", "median", "over startup",
                 "best", "");
   out << row;
@@ -2586,7 +2593,7 @@ int cmd_bench(const Args& args) {
 
   // `--version` does no work at all, so it is both the floor and a row of its own.
   std::snprintf(row, sizeof row,
-                "  %-18s %7.3f ms %13s %7.3f ms   an empty program, for comparison\n",
+                "  %-18s %7.3f ms %13s %7.3f ms   any process at all\n",
                 "process startup", floor.median / 1000.0, "--", floor.best / 1000.0);
   out << row;
 
@@ -2599,6 +2606,10 @@ int cmd_bench(const Args& args) {
                   t.best / 1000.0, cases[i].note.c_str());
     out << row;
   }
+
+  // now that the cache is warm, ask again, and believe whichever is faster
+  Timing floor_again = measure(self, {"--version"}, "", runs);
+  if (floor_again.median < floor.median) floor = floor_again;
 
   // say the thing the table is actually saying, because a table of milliseconds
   // on its own invites the reading that this program is slow

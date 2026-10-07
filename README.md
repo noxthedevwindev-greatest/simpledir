@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/demo.gif" width="820" alt="sd demo: bind a name, jump to it, typo suggestions">
+  <img src="docs/demo.gif" width="820" alt="sd demo: bind a name, jump to it, group with tags, hash a file, and find a directory you never named">
 </p>
 
 <h1 align="center">simpledir</h1>

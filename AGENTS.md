@@ -140,7 +140,17 @@ you. keep it that way — the split is the whole ergonomic argument, and it mean
     alias. if you add a verb, add it to `--help` too or those assertions stop
     covering it — that is the whole mechanism.
 
-22. **don't add a daemon.** a resident process holding the frecency model in memory is
+22. **a benchmark that flatters you is worse than none.** `cmd_bench()` forks the
+    real binary and forks it again for the floor, and the floor is measured
+    *twice* -- before and after the cases -- keeping the faster. Measuring it only
+    at the start was a bug with visible consequences: the first measurement absorbs
+    the cold page cache for the binary, so every case afterwards looks faster than
+    doing nothing, and the demo gif printed `-0.065 ms` for a jump. Keep the
+    "over startup" column honest or drop it. also watch the `snprintf` buffer: it
+    was sized for a table row, not for the paragraph below it, and truncated the
+    paragraph mid-word on screen.
+
+23. **don't add a daemon.** a resident process holding the frecency model in memory is
     the obvious answer to "make it fast" and it is measurably the wrong one: parsing
     the log cost ~120us, a unix socket round trip costs about the same, and
     `sd <alias>` never searched the log at all. the real cost was pre-`main` work — the
