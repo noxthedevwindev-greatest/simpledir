@@ -20,6 +20,7 @@
 </p>
 
 <p align="center">
+  <a href="https://noxthedevwindev-greatest.github.io/simpledir/"><img src="https://img.shields.io/badge/website-github.io-89b4fa?style=flat-square" alt="simpledir website"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/language-c%2B%2B-blue?style=flat-square&logo=c%2B%2B&logoColor=white" alt="C++">
   <img src="https://img.shields.io/badge/dependencies-curl%20only-brightgreen?style=flat-square" alt="curl only">
@@ -154,7 +155,7 @@ zoxide doesn't, and it's a single C++ file with no daemon.
 | remembers dirs you *named* | no | yes — that's the point |
 | state to maintain | sqlite db + a daemon + shell hooks | two json files |
 | moving an install | 3 files and a hook script | one file |
-| per-jump cost | sqlite query + daemon round trip | **0.8 ms**, measured |
+| per-jump cost | sqlite query + daemon round trip | **0.36 ms**, measured — run `sdcfg bench` for yours |
 | config you can read and hand-edit | no | yes |
 | your shell history | ignored | mined by `sd suggest` |
 | installing it | a package manager | `curl … \| bash` |

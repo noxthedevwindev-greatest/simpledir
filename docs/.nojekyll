@@ -1,0 +1,2 @@
+# served as plain static files. no Jekyll, no front matter, no build step -- the
+# site is one html file with the css inline, the same as sd.cpp is one cpp file.

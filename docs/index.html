@@ -1,0 +1,812 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>simpledir — the next zoxide</title>
+<meta name="description" content="simpledir binds names to directories and jumps to them, and remembers the ones you never named. two commands, one C++ file, curl and nothing else.">
+<meta name="theme-color" content="#1e1e2e">
+<meta name="color-scheme" content="dark">
+
+<meta property="og:type" content="website">
+<meta property="og:title" content="simpledir — the next zoxide">
+<meta property="og:description" content="sd moves you. sdcfg configures things. that's the whole tool. two commands, one C++ file, curl and nothing else.">
+<meta property="og:image" content="demo.gif">
+<meta name="twitter:card" content="summary_large_image">
+
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%231e1e2e'/><text x='50' y='72' font-size='58' font-family='monospace' font-weight='700' fill='%2389b4fa' text-anchor='middle'>sd</text></svg>">
+
+<style>
+  :root {
+    --base:      #1e1e2e;
+    --mantle:    #181825;
+    --crust:     #11111b;
+    --text:      #cdd6f4;
+    --subtext1:  #bac2de;
+    --subtext0:  #a6adc8;
+    --overlay1:  #7f849c;
+    --overlay0:  #6c7086;
+    --surface2:  #585b70;
+    --surface1:  #45475a;
+    --surface0:  #313244;
+    --blue:      #89b4fa;
+    --lavender:  #b4befe;
+    --green:     #a6e3a1;
+    --yellow:    #f9e2af;
+    --peach:     #fab387;
+    --red:       #f38ba8;
+    --mauve:     #cba6f7;
+    --pink:      #f5c2e7;
+    --teal:      #94e2d5;
+
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+
+    --measure: 960px;
+    --radius: 14px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    background: var(--base);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow-x: hidden;
+  }
+
+  /* a very quiet wash so the page isn't a flat slab */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: -20% -20% auto;
+    height: 70vh;
+    background:
+      radial-gradient(60% 100% at 20% 0%, rgba(137,180,250,.13), transparent 70%),
+      radial-gradient(50% 90% at 80% 10%, rgba(203,166,247,.10), transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  main, header, footer { position: relative; z-index: 1; }
+
+  .wrap {
+    width: 100%;
+    max-width: var(--measure);
+    margin-inline: auto;
+    padding-inline: 24px;
+  }
+
+  a { color: var(--blue); text-decoration: none; border-bottom: 1px solid rgba(137,180,250,.32); transition: border-color .15s, color .15s; }
+  a:hover { color: var(--lavender); border-bottom-color: var(--lavender); }
+
+  code, kbd, pre { font-family: var(--mono); }
+
+  code {
+    font-size: .9em;
+    background: var(--surface0);
+    border: 1px solid var(--surface1);
+    border-radius: 6px;
+    padding: .1em .4em;
+    color: var(--lavender);
+    word-break: break-word;
+  }
+
+  /* ---------- pause notice ---------- */
+  .notice {
+    background: linear-gradient(180deg, rgba(249,226,175,.10), rgba(249,226,175,.05));
+    border-bottom: 1px solid rgba(249,226,175,.20);
+    font-size: 14.5px;
+    line-height: 1.6;
+    color: var(--subtext1);
+  }
+  .notice .wrap { padding-block: 13px; display: flex; gap: 12px; align-items: flex-start; }
+  .notice .glyph { color: var(--yellow); flex: none; font-family: var(--mono); }
+  .notice strong { color: var(--yellow); font-weight: 650; }
+
+  /* ---------- hero ---------- */
+  header { padding: clamp(56px, 9vw, 104px) 0 clamp(28px, 4vw, 44px); text-align: center; }
+
+  .mark {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: clamp(46px, 9vw, 76px);
+    line-height: 1;
+    letter-spacing: -.03em;
+    margin-bottom: 22px;
+  }
+  .mark .caret {
+    color: var(--green);
+    animation: blink 1.15s steps(1) infinite;
+    font-weight: 400;
+    transform: translateY(2px);
+  }
+  @keyframes blink { 0%,49% { opacity: 1 } 50%,100% { opacity: .18 } }
+  @media (prefers-reduced-motion: reduce) { .mark .caret { animation: none } }
+
+  .kicker {
+    font-family: var(--mono);
+    font-size: clamp(19px, 3.4vw, 27px);
+    color: var(--blue);
+    margin: 0 0 14px;
+    letter-spacing: -.01em;
+  }
+
+  .lede {
+    max-width: 640px;
+    margin: 0 auto;
+    color: var(--subtext0);
+    font-size: clamp(16.5px, 2.2vw, 19px);
+  }
+  .lede b { color: var(--text); font-weight: 600; }
+
+  .badges { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 26px; }
+  .badge {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .02em;
+    color: var(--subtext0);
+    background: var(--surface0);
+    border: 1px solid var(--surface1);
+    border-radius: 999px;
+    padding: 5px 13px;
+    white-space: nowrap;
+  }
+  .badge b { color: var(--green); font-weight: 600; }
+
+  /* ---------- install ---------- */
+  .install { margin-top: 34px; }
+
+  .term {
+    background: var(--crust);
+    border: 1px solid var(--surface1);
+    border-radius: var(--radius);
+    overflow: hidden;
+    text-align: left;
+    box-shadow: 0 20px 50px -24px rgba(0,0,0,.75);
+  }
+  .term-bar {
+    display: flex; align-items: center; gap: 7px;
+    padding: 11px 15px;
+    background: var(--mantle);
+    border-bottom: 1px solid var(--surface0);
+  }
+  .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--surface1); }
+  .term-title {
+    margin-left: 9px; font-family: var(--mono); font-size: 12px; color: var(--overlay0);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  .cmd {
+    display: flex; align-items: center; gap: 12px;
+    padding: 16px 16px 16px 18px;
+    font-family: var(--mono);
+    font-size: 14.5px;
+  }
+  .cmd .prompt { color: var(--green); flex: none; user-select: none; }
+  .cmd .snippet {
+    flex: 1; min-width: 0;
+    color: var(--text);
+    /* the install line is 105 characters and will not fit on one row at any
+       readable size. let it wrap rather than scroll it behind an unlabelled
+       scrollbar -- a truncated install command is worse than a two-line one. */
+    white-space: pre-wrap;
+    /* <wbr> after each "/" gives the browser real break points, so a narrow
+       screen splits the URL at path segments instead of mid-character --
+       `raw.githubusercontent.c` / `om/...` was what `anywhere` produced. */
+    overflow-wrap: break-word;
+    line-height: 1.6;
+    padding-bottom: 2px;
+  }
+
+  .copy {
+    flex: none;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--subtext0);
+    background: var(--surface0);
+    border: 1px solid var(--surface1);
+    border-radius: 8px;
+    padding: 7px 13px;
+    cursor: pointer;
+    transition: background .15s, color .15s, border-color .15s;
+  }
+  .copy:hover { background: var(--surface1); color: var(--text); border-color: var(--surface2); }
+  .copy[data-done="1"] { color: var(--green); border-color: rgba(166,227,161,.45); }
+
+  .install-note {
+    margin: 15px auto 0;
+    font-size: 14.5px;
+    color: var(--overlay1);
+    max-width: 640px;
+  }
+  .install-note code { font-size: .88em; }
+
+  /* ---------- demo ---------- */
+  .demo { padding: clamp(34px, 5vw, 56px) 0 0; }
+  .demo-frame {
+    border: 1px solid var(--surface1);
+    border-radius: var(--radius);
+    overflow: hidden;
+    background: var(--crust);
+    box-shadow: 0 30px 70px -34px rgba(0,0,0,.85);
+  }
+  .demo-frame img { display: block; width: 100%; height: auto; }
+  .demo-cap {
+    text-align: center; font-family: var(--mono); font-size: 13px;
+    color: var(--overlay0); margin-top: 13px;
+  }
+
+  /* ---------- sections ---------- */
+  section { padding: clamp(52px, 8vw, 92px) 0 0; }
+
+  h2 {
+    font-size: clamp(25px, 4vw, 34px);
+    line-height: 1.2;
+    letter-spacing: -.022em;
+    margin: 0 0 8px;
+    font-weight: 700;
+  }
+  h2 .hash { color: var(--surface2); font-family: var(--mono); font-weight: 400; margin-right: .3em; }
+  .sub { color: var(--subtext0); margin: 0 0 30px; max-width: 680px; font-size: 16.5px; }
+
+  h3 {
+    font-size: 16px;
+    margin: 0 0 9px;
+    font-weight: 650;
+    letter-spacing: -.005em;
+  }
+
+  /* ---------- the split ---------- */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .card {
+    background: rgba(49,50,68,.5);
+    border: 1px solid var(--surface1);
+    border-radius: var(--radius);
+    padding: 24px 24px 22px;
+  }
+  .card .verb {
+    font-family: var(--mono);
+    font-size: 27px;
+    font-weight: 700;
+    letter-spacing: -.02em;
+    display: inline-block;
+    padding: 3px 13px;
+    border-radius: 9px;
+    margin-bottom: 15px;
+  }
+  .card.move  .verb { color: var(--crust); background: var(--blue); }
+  .card.cfg   .verb { color: var(--crust); background: var(--mauve); }
+  .card p { margin: 0 0 16px; color: var(--subtext0); font-size: 15.5px; }
+  .card ul { list-style: none; margin: 0; padding: 0; font-family: var(--mono); font-size: 13.5px; }
+  .card li { padding: 5px 0; color: var(--subtext1); border-top: 1px dashed rgba(69,71,90,.7); }
+  .card li:first-child { border-top: 0; }
+  .card li span { color: var(--overlay0); float: right; font-family: var(--sans); font-size: 13px; }
+
+  .rule {
+    margin-top: 18px;
+    padding: 16px 20px;
+    background: rgba(137,180,250,.07);
+    border-left: 3px solid var(--blue);
+    border-radius: 0 9px 9px 0;
+    color: var(--subtext1);
+    font-size: 15.5px;
+  }
+
+  /* ---------- terminal examples ---------- */
+  .examples { display: grid; gap: 18px; }
+  .examples .term { box-shadow: none; }
+  .examples pre {
+    margin: 0;
+    padding: 17px 19px;
+    font-size: 13.8px;
+    line-height: 1.72;
+    overflow-x: auto;
+    color: var(--subtext1);
+  }
+  .examples pre::-webkit-scrollbar { height: 6px }
+  .examples pre::-webkit-scrollbar-thumb { background: var(--surface1); border-radius: 3px }
+  .p  { color: var(--green) }      /* prompt */
+  .c  { color: var(--text) }       /* command */
+  .o  { color: var(--overlay1) }   /* dim output */
+  .hi { color: var(--yellow) }     /* highlighted output */
+  .err{ color: var(--red) }        /* error output */
+  .ok { color: var(--green) }      /* success */
+
+  /* ---------- numbers ---------- */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 26px; }
+  .stat {
+    background: rgba(49,50,68,.5);
+    border: 1px solid var(--surface1);
+    border-radius: 12px;
+    padding: 20px 18px;
+    text-align: center;
+  }
+  .stat .v {
+    font-family: var(--mono);
+    font-size: clamp(24px, 4vw, 33px);
+    font-weight: 700;
+    letter-spacing: -.03em;
+    color: var(--green);
+    line-height: 1.1;
+  }
+  .stat .l { font-size: 13px; color: var(--overlay1); margin-top: 7px; line-height: 1.4; }
+
+  .table-scroll { overflow-x: auto; border: 1px solid var(--surface1); border-radius: var(--radius); background: rgba(49,50,68,.4); }
+  table { border-collapse: collapse; width: 100%; font-size: 15px; min-width: 520px; }
+  th, td { text-align: left; padding: 13px 18px; border-bottom: 1px solid rgba(69,71,90,.6); }
+  thead th {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--overlay0); font-weight: 600; background: rgba(24,24,37,.55);
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.num { font-family: var(--mono); color: var(--green); white-space: nowrap; }
+  td.dim { color: var(--subtext0); }
+  tbody tr:hover { background: rgba(69,71,90,.24); }
+
+  .fnote { font-size: 14px; color: var(--overlay1); margin-top: 14px; }
+
+  /* ---------- feature grid ---------- */
+  .feats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .feat {
+    background: rgba(49,50,68,.5);
+    border: 1px solid var(--surface1);
+    border-radius: 12px;
+    padding: 21px 20px;
+    transition: border-color .18s, transform .18s;
+  }
+  .feat:hover { border-color: var(--surface2); transform: translateY(-2px); }
+  .feat .ic { font-family: var(--mono); font-size: 20px; color: var(--blue); display: block; margin-bottom: 11px; }
+  .feat p { margin: 0; font-size: 14.5px; color: var(--subtext0); line-height: 1.6; }
+  .feat b { color: var(--text); font-weight: 600; }
+
+  /* ---------- verified ---------- */
+  /* stacked rather than side-by-side: the terminal was half the width and so
+     short that the column beside it left a hole, and its longest line was a
+     couple of characters wider than the space and grew a scrollbar. full width
+     for the terminal, the bullets two-up beneath it, the caveat full width. */
+  .verify { display: grid; grid-template-columns: 1fr 1fr; gap: 24px 34px; }
+  .verify .term { grid-column: 1 / -1; }
+  .verify .term pre { margin: 0; padding: 17px 19px; font-size: 13.6px; line-height: 1.7; }
+  .verify ul {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px 34px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .verify li {
+    display: flex; gap: 12px;
+    font-size: 15px; color: var(--subtext0);
+  }
+  .verify li .tick { color: var(--green); flex: none; font-family: var(--mono); }
+  .verify li b { color: var(--text); font-weight: 600; }
+
+  .honest {
+    grid-column: 1 / -1;
+    padding: 16px 20px;
+    background: rgba(250,179,135,.07);
+    border-left: 3px solid var(--peach);
+    border-radius: 0 9px 9px 0;
+    font-size: 14.5px;
+    color: var(--subtext0);
+    line-height: 1.6;
+  }
+  .honest b { color: var(--peach); font-weight: 600; }
+
+  /* ---------- links ---------- */
+  .links { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .link {
+    display: block;
+    background: rgba(49,50,68,.5);
+    border: 1px solid var(--surface1);
+    border-radius: 12px;
+    padding: 20px;
+    border-bottom-width: 1px;
+    transition: border-color .18s, transform .18s, background .18s;
+  }
+  .link:hover { border-color: var(--blue); transform: translateY(-2px); background: rgba(49,50,68,.75); }
+  .link .t { display: block; color: var(--text); font-weight: 650; font-size: 15.5px; margin-bottom: 5px; }
+  .link .d { display: block; color: var(--overlay1); font-size: 13.5px; line-height: 1.5; }
+
+  /* ---------- footer ---------- */
+  footer {
+    margin-top: clamp(64px, 9vw, 110px);
+    border-top: 1px solid var(--surface0);
+    background: var(--mantle);
+    padding: 34px 0 44px;
+  }
+  .foot { display: flex; flex-wrap: wrap; gap: 18px; justify-content: space-between; align-items: center; }
+  .foot p { margin: 0; font-size: 14px; color: var(--overlay1); }
+  .foot nav { display: flex; flex-wrap: wrap; gap: 20px; font-size: 14px; }
+  .foot nav a { color: var(--subtext0); border-bottom-color: transparent; }
+  .foot nav a:hover { color: var(--blue); border-bottom-color: rgba(137,180,250,.4); }
+
+  /* ---------- responsive ---------- */
+  @media (max-width: 860px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .feats { grid-template-columns: repeat(2, 1fr); }
+    .links { grid-template-columns: repeat(2, 1fr); }
+    .verify { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 640px) {
+    body { font-size: 16px; }
+    .split { grid-template-columns: 1fr; }
+    .feats { grid-template-columns: 1fr; }
+    .links { grid-template-columns: 1fr; }
+    /* let the command take the full width and drop the copy button onto its own
+       row: at 414px the button was eating 75 of the 332 pixels available to the
+       URL, which is what turned a four-line wrap into six. */
+    .cmd { flex-wrap: wrap; align-items: flex-start; }
+    .cmd .snippet { flex: 1 1 calc(100% - 42px); }
+    .copy { margin-left: 42px; margin-top: 12px; }
+    .notice .wrap { font-size: 13.5px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="notice">
+  <div class="wrap">
+    <span class="glyph" aria-hidden="true">⏸</span>
+    <div><strong>paused — i'm on holiday.</strong> issues and pull requests will sit unread for a while, so please don't wait on me. nothing is broken: the releases stay up, <code>curl | bash</code> and <code>sdcfg update</code> keep working, and every download still checks out against its published <code>SHA256SUMS</code>. sorry for the inconvenience — i'll pick this back up when i'm home.</div>
+  </div>
+</div>
+
+<header>
+  <div class="wrap">
+    <div class="mark"><span class="caret" aria-hidden="true">❯</span><span>sd</span></div>
+    <p class="kicker">the next zoxide</p>
+    <p class="lede"><b>sd</b> moves you. <b>sdcfg</b> configures things. that's the whole tool — two commands, one C++ file, and curl is the only thing it ever runs.</p>
+
+    <div class="badges">
+      <span class="badge"><b>v11.0.0</b></span>
+      <span class="badge">MIT</span>
+      <span class="badge">linux only</span>
+      <span class="badge">statically linked</span>
+      <span class="badge">curl is the <b>only</b> dependency</span>
+      <span class="badge">645 tests</span>
+    </div>
+
+    <div class="install">
+      <div class="term">
+        <div class="term-bar">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <span class="term-title">install</span>
+        </div>
+        <div class="cmd">
+          <span class="prompt" aria-hidden="true">$</span>
+          <span class="snippet" id="cmd">curl -fsSL https://<wbr>raw.githubusercontent.com/<wbr>noxthedevwindev-greatest/<wbr>simpledir/<wbr>v11.0.0/<wbr>install.sh | bash</span>
+          <button class="copy" id="copy" type="button" aria-label="copy install command">copy</button>
+        </div>
+      </div>
+      <p class="install-note">it works out your platform, downloads a prebuilt binary, or <b>compiles the one source file itself</b> if there isn't one for your architecture. prefer to look before you pipe? that's the right instinct — <code>curl … -o install.sh</code>, then <code>less install.sh &amp;&amp; bash install.sh</code>.</p>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <div class="wrap demo">
+    <div class="demo-frame">
+      <img src="demo.gif" alt="simpledir demo: bind a name, jump to it, group with tags, hash a file, and find a directory you never named">
+    </div>
+    <p class="demo-cap">bind a name · jump · group with tags · measure it · hash a file · find what you never named</p>
+  </div>
+
+  <!-- the split -->
+  <section id="commands">
+    <div class="wrap">
+      <h2><span class="hash">#</span>two commands, split on purpose</h2>
+      <p class="sub">not by what they're <i>called</i> — by what they're allowed to do to you. the split is the whole ergonomic argument.</p>
+
+      <div class="split">
+        <div class="card move">
+          <span class="verb">sd</span>
+          <p><b>moves you</b>, and only ever reads your config. safe in a pipeline, safe to hit by reflex.</p>
+          <ul>
+            <li>sd dots <span>jump to a name</span></li>
+            <li>sd dot <span>a unique prefix</span></li>
+            <li>sd dots/nix <span>into a subdir</span></li>
+            <li>sd - <span>previous dir</span></li>
+            <li>sd ls <span>what can i jump to</span></li>
+            <li>sd top <span>where you actually go</span></li>
+            <li>sd suggest <span>mine your history</span></li>
+            <li>sd sha256 file <span>hash it yourself</span></li>
+          </ul>
+        </div>
+
+        <div class="card cfg">
+          <span class="verb">sdcfg</span>
+          <p><b>changes things</b>, and can never change your directory. it can't cd, because a subprocess can't.</p>
+          <ul>
+            <li>sdcfg add <span>bind a name</span></li>
+            <li>sdcfg import dir <span>a whole tree</span></li>
+            <li>sdcfg bind <span>name what history shows</span></li>
+            <li>sdcfg tag @desk <span>group aliases</span></li>
+            <li>sdcfg zoxide <span>import from zoxide</span></li>
+            <li>sdcfg doctor <span>check the install</span></li>
+            <li>sdcfg update <span>upgrade, verified</span></li>
+            <li>sdcfg bench <span>measure it here</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <p class="rule"><code>sd</code> cannot rewrite your aliases and <code>sdcfg</code> cannot change your directory. one is safe in a pipeline, the other is safe to hit by reflex. every flag is long-form too — <code>--force</code>, <code>--dry-run</code>, <code>--keep-symlinks</code> — no short aliases to misremember.</p>
+    </div>
+  </section>
+
+  <!-- what it feels like -->
+  <section id="feel">
+    <div class="wrap">
+      <h2><span class="hash">#</span>what it actually feels like</h2>
+      <p class="sub">the two things you'll notice in the first minute: a typo doesn't fail flat, and a directory you never named is already remembered.</p>
+
+      <div class="examples">
+        <div class="term">
+          <div class="term-bar">
+            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+            <span class="term-title">a typo</span>
+          </div>
+<pre><span class="p">$</span> <span class="c">sd dotfile</span>
+<span class="err">sd: no alias named 'dotfile'</span>
+  <span class="hi">did you mean: dotfiles</span>
+  see them all: sd ls</pre>
+        </div>
+
+        <div class="term">
+          <div class="term-bar">
+            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+            <span class="term-title">no setup — your shell already wrote it down</span>
+          </div>
+<pre><span class="p">$</span> <span class="c">sd suggest</span>
+<span class="o">2841 history commands from 1 file(s), 24 distinct directories</span>
+<span class="o">4 already bound, showing the top 3:</span>
+
+     <span class="hi">37x</span>  /home/you/Projects/simpledir
+     <span class="hi">19x</span>  /home/you/.config/hypr
+      <span class="hi">8x</span>  /home/you/src/neovim-config
+
+<span class="o">bind them all:</span>
+  <span class="c">sdcfg add simpledir /home/you/Projects/simpledir</span>
+  <span class="c">sdcfg add hypr /home/you/.config/hypr</span></pre>
+        </div>
+
+        <div class="term">
+          <div class="term-bar">
+            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+            <span class="term-title">a dead directory tells you the fix, not just that it failed</span>
+          </div>
+<pre><span class="p">$</span> <span class="c">sd oldproject</span>
+<span class="err">sd: /home/you/Projects/oldproject is gone</span>
+  it was bound as <span class="hi">oldproject</span>. rebind it:
+  <span class="c">sdcfg add oldproject /the/new/place</span>
+  or drop it: <span class="c">sdcfg rm oldproject</span></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- numbers -->
+  <section id="numbers">
+    <div class="wrap">
+      <h2><span class="hash">#</span>numbers, not adjectives</h2>
+      <p class="sub">there's a measuring stick in the box rather than a number you have to take on trust. <code>sdcfg bench</code> forks the real binary, median of 200 runs, on your machine, right now.</p>
+
+      <div class="stats">
+        <div class="stat"><div class="v">0.36<small style="font-size:.5em"> ms</small></div><div class="l">a jump, median of 200 forks</div></div>
+        <div class="stat"><div class="v">+0.07<small style="font-size:.5em"> ms</small></div><div class="l">over just starting a process</div></div>
+        <div class="stat"><div class="v">1</div><div class="l">source file, ~4,300 lines</div></div>
+        <div class="stat"><div class="v">0</div><div class="l">daemons, databases, dependencies</div></div>
+      </div>
+
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>case</th><th>median</th><th>over startup</th><th>what it's doing</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="dim">process startup</td><td class="num">0.288 ms</td><td class="num">—</td><td class="dim">any process at all</td></tr>
+            <tr><td>sd &lt;alias&gt;</td><td class="num">0.356 ms</td><td class="num">+0.068 ms</td><td class="dim">the common case: hit a name</td></tr>
+            <tr><td>sd ls</td><td class="num">0.382 ms</td><td class="num">+0.094 ms</td><td class="dim">6 aliases in the config</td></tr>
+            <tr><td>sdcfg doctor</td><td class="num">0.587 ms</td><td class="num">+0.299 ms</td><td class="dim">every check it can do</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="fnote">measured on an Arch laptop, 6 aliases, median of 200 runs. yours will differ — that's what the tool is for. note the jump doesn't search the frecency log at all: recording a visit needs one timestamp, found by a substring scan rather than a parse.</p>
+    </div>
+  </section>
+
+  <!-- zoxide -->
+  <section id="zoxide">
+    <div class="wrap">
+      <h2><span class="hash">#</span>it replaces zoxide</h2>
+      <p class="sub"><a href="https://github.com/ajeetdsouza/zoxide">zoxide</a> is a great tool and this is a drop-in replacement: same frecency idea, same "remember a directory I never named" behaviour. it doesn't conflict, so you can run both for a while and compare.</p>
+
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th></th><th>zoxide</th><th>simpledir</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="dim">remembers dirs you never named</td><td class="dim">frecency-scored</td><td>frecency-scored, same half-life idea</td></tr>
+            <tr><td class="dim">remembers dirs you <i>named</i></td><td class="dim">no</td><td><b>yes — that's the point</b></td></tr>
+            <tr><td class="dim">state to maintain</td><td class="dim">sqlite db + daemon + shell hooks</td><td>two json files</td></tr>
+            <tr><td class="dim">config you can read and hand-edit</td><td class="dim">no</td><td>yes</td></tr>
+            <tr><td class="dim">your shell history</td><td class="dim">ignored</td><td>mined by <code>sd suggest</code></td></tr>
+            <tr><td class="dim">per-jump cost</td><td class="dim">sqlite query + daemon round trip</td><td class="num">0.36 ms, measured</td></tr>
+            <tr><td class="dim">coming from zoxide</td><td class="dim">—</td><td><code>sdcfg zoxide</code> imports what it knows</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="fnote">your aliases are data, not installation — they stay in <code>~/.simpledir/config.json</code> whether or not the program is still there.</p>
+    </div>
+  </section>
+
+  <!-- what it's made of -->
+  <section id="made-of">
+    <div class="wrap">
+      <h2><span class="hash">#</span>what it's made of</h2>
+      <p class="sub">the short version of every promise this thing makes. each one is a property of the code, not a policy.</p>
+
+      <div class="feats">
+        <div class="feat">
+          <span class="ic">◈</span>
+          <h3>one source file</h3>
+          <p><b><code>sd.cpp</code></b> is the whole program — json, config, frecency, both command halves, the sha-256. one <code>g++</code> invocation, no build system to learn.</p>
+        </div>
+        <div class="feat">
+          <span class="ic">⛁</span>
+          <h3>statically linked</h3>
+          <p>nothing left to install at runtime. <b>curl</b> is the entire dependency list — it's how downloads happen, since TLS isn't in the C++ stdlib.</p>
+        </div>
+        <div class="feat">
+          <span class="ic">◍</span>
+          <h3>no daemon</h3>
+          <p>nothing resident, nothing to start, nothing to hang. it was <b>measured</b> rather than assumed: a socket round trip costs about as much as just parsing the log.</p>
+        </div>
+        <div class="feat">
+          <span class="ic">◇</span>
+          <h3>no model, no network on the jump</h3>
+          <p>every feature is <b>arithmetic over data already on this machine</b> — a half-life, a substring match, an edit distance. it never calls out. it works on a plane.</p>
+        </div>
+        <div class="feat">
+          <span class="ic">▤</span>
+          <h3>two json files</h3>
+          <p>one you edit, one it doesn't. plain <b>hand-editable json</b> in <code>~/.simpledir</code> — no database, no migration ceremony, no proprietary format.</p>
+        </div>
+        <div class="feat">
+          <span class="ic">✓</span>
+          <h3>645 assertions</h3>
+          <p>the suite drives the compiled binary through <b>the same command line you do</b>, in real bash subprocesses, with no network. it must be green before anything ships.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- verified -->
+  <section id="verified">
+    <div class="wrap">
+      <h2><span class="hash">#</span>the download checks itself</h2>
+      <p class="sub">until 11.0, both install paths asked one question of a binary fetched over the network: <i>does it claim to be us?</i> which is a question about what the file <b>says</b>.</p>
+
+      <div class="verify">
+        <div class="term">
+          <div class="term-bar">
+            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+            <span class="term-title">verified / refused</span>
+          </div>
+<pre><span class="ok">==> checksum verified against the published SHA256SUMS</span>
+<span class="ok">==> got sd 11.0.0 - every download is checked…</span>
+
+<span class="err">!! CHECKSUM MISMATCH for sd-linux-x86_64</span>
+<span class="err">!!   published: 3dac5b53a658…</span>
+<span class="err">!!   downloaded: 1c72c1cf950f…</span>
+<span class="err">xx does not match the checksum this release published.</span></pre>
+        </div>
+
+        <ul>
+          <li><span class="tick">▸</span><span>every release ships a <b>SHA256SUMS</b>, and the installer, <code>sdcfg update</code> and the PKGBUILD all compare against it <b>before anything is run or replaced</b>.</span></li>
+          <li><span class="tick">▸</span><span>a <b>wrong</b> checksum is fatal — that's the one case where continuing puts someone else's bytes in your PATH.</span></li>
+          <li><span class="tick">▸</span><span>a <b>missing</b> one only warns. old mirrors and offline boxes must not brick an install for reasons that have nothing to do with tampering.</span></li>
+          <li><span class="tick">▸</span><span><code>sd sha256 &lt;file&gt;</code> lets you check a download <b>without trusting the thing doing the verifying</b>.</span></li>
+          <li><span class="tick">▸</span><span>no crypto dependency: SHA-256 is forty lines of arithmetic in <code>sd.cpp</code>, pinned to the published NIST vectors.</span></li>
+          <li><span class="tick">▸</span><span>the updater also runs what it fetched with <b><code>--version</code></b> and checks it really is simpledir and really newer, before swapping your binary in. a same-version or garbage download never replaces a working install.</span></li>
+        </ul>
+
+        <div class="honest">
+          <b>what this does and does not prove.</b> a checksum published next to the file it describes proves the two arrived together. it cannot prove <i>who</i> wrote them — anyone who can change the download can change the sum. it catches the ordinary failure: a truncated transfer, a corrupted mirror, a proxy that mangled a byte. signing releases is the next step up, and this is not it.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- links -->
+  <section id="get">
+    <div class="wrap">
+      <h2><span class="hash">#</span>where everything is</h2>
+      <p class="sub">no funnel, no email, no signup. it's a file on the internet and a repository.</p>
+
+      <div class="links">
+        <a class="link" href="https://github.com/noxthedevwindev-greatest/simpledir/releases/tag/v11.0.0">
+          <span class="t">releases →</span>
+          <span class="d">binaries, <code>sd.cpp</code>, <code>install.sh</code> and <code>SHA256SUMS</code>, every one of them verified.</span>
+        </a>
+        <a class="link" href="https://github.com/noxthedevwindev-greatest/simpledir">
+          <span class="t">source →</span>
+          <span class="d">one C++ file, the test suite, and the ground rules for working on it.</span>
+        </a>
+        <a class="link" href="https://github.com/noxthedevwindev-greatest/simpledir/blob/main/README.md">
+          <span class="t">readme →</span>
+          <span class="d">every command, every flag, and eleven releases of changelog.</span>
+        </a>
+        <a class="link" href="https://github.com/noxthedevwindev-greatest/simpledir/blob/main/LICENSE">
+          <span class="t">MIT →</span>
+          <span class="d">do what you want with it. PRs welcome.</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <p>simpledir — <b>sd</b> moves you, <b>sdcfg</b> configures things.</p>
+    <nav>
+      <a href="https://github.com/noxthedevwindev-greatest/simpledir">github</a>
+      <a href="https://github.com/noxthedevwindev-greatest/simpledir/releases">releases</a>
+      <a href="https://github.com/noxthedevwindev-greatest/simpledir/blob/main/LICENSE">mit license</a>
+      <a href="https://github.com/noxthedevwindev-greatest/simpledir/issues/1">paused notice</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+  // the only script on the page: copy the install line. no libraries, no build.
+  (function () {
+    var btn = document.getElementById('copy');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var text = document.getElementById('cmd').textContent.trim();
+      var done = function () {
+        btn.textContent = 'copied';
+        btn.setAttribute('data-done', '1');
+        setTimeout(function () {
+          btn.textContent = 'copy';
+          btn.removeAttribute('data-done');
+        }, 1800);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, function () { fallback(text, done); });
+      } else {
+        fallback(text, done);
+      }
+    });
+    function fallback(text, done) {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:absolute;left:-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); done(); } catch (e) {}
+      document.body.removeChild(ta);
+    }
+  })();
+</script>
+
+</body>
+</html>
