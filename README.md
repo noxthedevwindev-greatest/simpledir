@@ -910,7 +910,7 @@ else with `SIMPLEDIR_BIN=/path/to/sd`.
 
 ```bash
 make                # build: one rustc invocation over one file, static libc when available
-make test           # 645 assertions, real bash subprocesses, no network
+make test           # 646 assertions, real bash subprocesses, no network
 make assets         # dist/: the binary, main.rs, install.sh, SHA256SUMS
 make release        # tag, push, publish with assets attached
 vhs docs/demo.tape  # re-record the gif above (needs vhs + ttyd)
