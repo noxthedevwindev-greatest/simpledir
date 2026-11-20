@@ -1,8 +1,8 @@
 > [!IMPORTANT]
-> **still on holiday, but v12.0.0 is out.** the pause issue is closed, and this
-> release is a present for your patience. `curl | bash` and `sdcfg update` keep
+> **v12.0.0 is out.** simpledir has been rewritten in Rust with the same
+> shortcuts. the pause issue is closed; `curl | bash` and `sdcfg update` keep
 > working, and every download still checks out against its published
-> `SHA256SUMS`. issues and pull requests will wait until i'm home.
+> `SHA256SUMS`.
 
 <p align="center">
   <img src="docs/demo.gif" width="820" alt="sd demo: bind a name, jump to it, group with tags, hash a file, and find a directory you never named">
