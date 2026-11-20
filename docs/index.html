@@ -4,13 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>simpledir — the next zoxide</title>
-<meta name="description" content="simpledir binds names to directories and jumps to them, and remembers the ones you never named. two commands, one C++ file, curl and nothing else.">
+<meta name="description" content="simpledir binds names to directories and jumps to them, and remembers the ones you never named. two commands, one Rust file, curl and nothing else.">
 <meta name="theme-color" content="#1e1e2e">
 <meta name="color-scheme" content="dark">
 
 <meta property="og:type" content="website">
 <meta property="og:title" content="simpledir — the next zoxide">
-<meta property="og:description" content="sd moves you. sdcfg configures things. that's the whole tool. two commands, one C++ file, curl and nothing else.">
+<meta property="og:description" content="sd moves you. sdcfg configures things. that's the whole tool. two commands, one Rust file, curl and nothing else.">
 <meta property="og:image" content="demo.gif">
 <meta name="twitter:card" content="summary_large_image">
 
@@ -469,10 +469,10 @@
   <div class="wrap">
     <div class="mark"><span class="caret" aria-hidden="true">❯</span><span>sd</span></div>
     <p class="kicker">the next zoxide</p>
-    <p class="lede"><b>sd</b> moves you. <b>sdcfg</b> configures things. that's the whole tool — two commands, one C++ file, and curl is the only thing it ever runs.</p>
+    <p class="lede"><b>sd</b> moves you. <b>sdcfg</b> configures things. that's the whole tool — two commands, one Rust file, rewritten in Rust with the same shortcuts. curl is the only thing it ever runs.</p>
 
     <div class="badges">
-      <span class="badge"><b>v11.0.0</b></span>
+      <span class="badge"><b>v12.0.0</b></span>
       <span class="badge">MIT</span>
       <span class="badge">linux only</span>
       <span class="badge">statically linked</span>
@@ -488,11 +488,11 @@
         </div>
         <div class="cmd">
           <span class="prompt" aria-hidden="true">$</span>
-          <span class="snippet" id="cmd">curl -fsSL https://<wbr>raw.githubusercontent.com/<wbr>noxthedevwindev-greatest/<wbr>simpledir/<wbr>v11.0.0/<wbr>install.sh | bash</span>
+          <span class="snippet" id="cmd">curl -fsSL https://<wbr>raw.githubusercontent.com/<wbr>noxthedevwindev-greatest/<wbr>simpledir/<wbr>v12.0.0/<wbr>install.sh | bash</span>
           <button class="copy" id="copy" type="button" aria-label="copy install command">copy</button>
         </div>
       </div>
-      <p class="install-note">it works out your platform, downloads a prebuilt binary, or <b>compiles the one source file itself</b> if there isn't one for your architecture. prefer to look before you pipe? that's the right instinct — <code>curl … -o install.sh</code>, then <code>less install.sh &amp;&amp; bash install.sh</code>.</p>
+      <p class="install-note">it works out your platform, downloads a prebuilt binary, or <b>compiles the one Rust file itself</b> with <code>rustc</code> if there isn't one for your architecture. prefer to look before you pipe? that's the right instinct — <code>curl … -o install.sh</code>, then <code>less install.sh &amp;&amp; bash install.sh</code>.</p>
     </div>
   </div>
 </header>
@@ -665,12 +665,12 @@
         <div class="feat">
           <span class="ic">◈</span>
           <h3>one source file</h3>
-          <p><b><code>sd.cpp</code></b> is the whole program — json, config, frecency, both command halves, the sha-256. one <code>g++</code> invocation, no build system to learn.</p>
+          <p><b><code>src/main.rs</code></b> is the whole program — json, config, frecency, both command halves, the sha-256. one <code>rustc</code> invocation, no crates, no <code>Cargo.toml</code>, no C++ toolchain, no build system to learn.</p>
         </div>
         <div class="feat">
           <span class="ic">⛁</span>
           <h3>statically linked</h3>
-          <p>nothing left to install at runtime. <b>curl</b> is the entire dependency list — it's how downloads happen, since TLS isn't in the C++ stdlib.</p>
+          <p>nothing left to install at runtime. <b>curl</b> is the entire dependency list — it's how downloads happen, since TLS isn't in the Rust stdlib.</p>
         </div>
         <div class="feat">
           <span class="ic">◍</span>
@@ -709,7 +709,7 @@
             <span class="term-title">verified / refused</span>
           </div>
 <pre><span class="ok">==> checksum verified against the published SHA256SUMS</span>
-<span class="ok">==> got sd 11.0.0 - every download is checked…</span>
+<span class="ok">==> got sd 12.0.0 - rewritten in Rust, same shortcuts…</span>
 
 <span class="err">!! CHECKSUM MISMATCH for sd-linux-x86_64</span>
 <span class="err">!!   published: 3dac5b53a658…</span>
@@ -722,7 +722,7 @@
           <li><span class="tick">▸</span><span>a <b>wrong</b> checksum is fatal — that's the one case where continuing puts someone else's bytes in your PATH.</span></li>
           <li><span class="tick">▸</span><span>a <b>missing</b> one only warns. old mirrors and offline boxes must not brick an install for reasons that have nothing to do with tampering.</span></li>
           <li><span class="tick">▸</span><span><code>sd sha256 &lt;file&gt;</code> lets you check a download <b>without trusting the thing doing the verifying</b>.</span></li>
-          <li><span class="tick">▸</span><span>no crypto dependency: SHA-256 is forty lines of arithmetic in <code>sd.cpp</code>, pinned to the published NIST vectors.</span></li>
+          <li><span class="tick">▸</span><span>no crypto dependency: SHA-256 is forty lines of arithmetic in <code>src/main.rs</code>, pinned to the published NIST vectors.</span></li>
           <li><span class="tick">▸</span><span>the updater also runs what it fetched with <b><code>--version</code></b> and checks it really is simpledir and really newer, before swapping your binary in. a same-version or garbage download never replaces a working install.</span></li>
         </ul>
 
@@ -740,17 +740,17 @@
       <p class="sub">no funnel, no email, no signup. it's a file on the internet and a repository.</p>
 
       <div class="links">
-        <a class="link" href="https://github.com/noxthedevwindev-greatest/simpledir/releases/tag/v11.0.0">
+        <a class="link" href="https://github.com/noxthedevwindev-greatest/simpledir/releases/tag/v12.0.0">
           <span class="t">releases →</span>
-          <span class="d">binaries, <code>sd.cpp</code>, <code>install.sh</code> and <code>SHA256SUMS</code>, every one of them verified.</span>
+          <span class="d">binaries, <code>main.rs</code>, <code>install.sh</code> and <code>SHA256SUMS</code>, every one of them verified.</span>
         </a>
         <a class="link" href="https://github.com/noxthedevwindev-greatest/simpledir">
           <span class="t">source →</span>
-          <span class="d">one C++ file, the test suite, and the ground rules for working on it.</span>
+          <span class="d">one Rust file, the test suite, and the ground rules for working on it.</span>
         </a>
         <a class="link" href="https://github.com/noxthedevwindev-greatest/simpledir/blob/main/README.md">
           <span class="t">readme →</span>
-          <span class="d">every command, every flag, and eleven releases of changelog.</span>
+          <span class="d">every command, every flag, and twelve releases of changelog.</span>
         </a>
         <a class="link" href="https://github.com/noxthedevwindev-greatest/simpledir/blob/main/LICENSE">
           <span class="t">MIT →</span>

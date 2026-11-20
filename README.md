@@ -22,7 +22,7 @@
 <p align="center">
   <a href="https://noxthedevwindev-greatest.github.io/simpledir/"><img src="https://img.shields.io/badge/website-github.io-89b4fa?style=flat-square" alt="simpledir website"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT License"></a>
-  <img src="https://img.shields.io/badge/language-c%2B%2B-blue?style=flat-square&logo=c%2B%2B&logoColor=white" alt="C++">
+  <img src="https://img.shields.io/badge/language-rust-orange?style=flat-square&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/dependencies-curl%20only-brightgreen?style=flat-square" alt="curl only">
   <img src="https://img.shields.io/badge/shell-bash%20%7C%20zsh-informational?style=flat-square" alt="bash or zsh">
   <img src="https://img.shields.io/github/stars/noxthedevwindev-greatest/simpledir?style=flat-square" alt="stars">
@@ -32,7 +32,7 @@
 
 **simpledir** binds names you choose to directories, jumps to them, and remembers
 the ones you never named. state is two json files in `~/.simpledir`: one you
-edit, one it doesn't. no interpreter, no database, no daemon, one C++ file.
+edit, one it doesn't. no interpreter, no database, no daemon, one Rust file.
 
 it is two commands, split by what they do to you:
 
@@ -98,13 +98,13 @@ you have no compiler. either way you get `sd` plus an `sdcfg` symlink in
 `~/.local/bin` and a wired-up shell rc.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v11.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v12.0.0/install.sh | bash
 ```
 
 prefer to look before you pipe? that's the right instinct:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v11.0.0/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v12.0.0/install.sh -o install.sh
 less install.sh && bash install.sh
 ```
 
@@ -119,7 +119,7 @@ git clone https://github.com/noxthedevwindev-greatest/simpledir
 cd simpledir && make install
 ```
 
-no package manager, no dependencies, no interpreter. one C++ file and curl. a
+no package manager, no dependencies, no interpreter. one Rust file and curl. a
 PKGBUILD is in `packaging/`.
 
 the installer works out your platform, downloads a prebuilt binary if there is
@@ -147,7 +147,7 @@ silently overwriting:
 [zoxide](https://github.com/ajeetdsouza/zoxide) is a great tool, and this is a
 drop-in replacement for it: same frecency idea, same "remember a directory I
 never named" behaviour. it also remembers the directories you *did* name, which
-zoxide doesn't, and it's a single C++ file with no daemon.
+zoxide doesn't, and it's a single Rust file with no daemon.
 
 | | zoxide | simpledir |
 | --- | --- | --- |
@@ -282,6 +282,36 @@ want there anyway.
 tested on bash 5.2. the wrapper only uses portable constructs, so zsh should be
 fine, but that's untested — tell me if it breaks.
 
+## what's new in 12.0
+
+**the whole program is now in Rust.** same shortcuts, same data formats, same
+verbs and flags, same shell wrapper, prompts, completions and machine-readable
+output — `sd` still moves you and `sdcfg` still configures things. the C++
+source is history; the one source file is `src/main.rs`, Rust 2021, standard
+library only: no crates and no `Cargo.toml`. `sdcfg` is still a symlink to `sd`
+and the two halves are still chosen from `argv[0]`.
+
+```bash
+rustc --edition 2021 -O -C strip=symbols -o sd src/main.rs
+```
+
+the Makefile adds `-C target-feature=+crt-static` when the toolchain has a
+static libc, and falls back to a dynamic link with a note rather than silently
+shipping a slower binary.
+
+what changed around the program:
+
+- release assets are now `sd-linux-<arch>`, `main.rs`, `install.sh` and
+  `SHA256SUMS` — the source asset was renamed from `sd.cpp` to `main.rs`
+- `curl | bash`, when there's no prebuilt binary for your architecture, fetches
+  `$RAW/src/main.rs` from the versioned tag and compiles it with `rustc`
+- SHA-256 is still hand-implemented in `src/main.rs` and pinned to the NIST
+  vectors; a **missing** `SHA256SUMS` still warns and a **wrong** one is still
+  fatal before anything is run or replaced
+
+no model, no inference, no new dependency, and nothing changed about how a jump
+works.
+
 ## what's new in 11.0
 
 **every download is now checked against a published checksum.** until now both
@@ -295,7 +325,7 @@ it before anything is run or replaced:
 
 ```
 ==> checksum verified against the published SHA256SUMS
-==> got sd 11.0.0 - every download is checked against its published checksum
+==> got sd 12.0.0 - rewritten in Rust, same shortcuts
 ```
 
 and the failure is loud and fatal, because that is the one case where continuing
@@ -323,9 +353,10 @@ ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  -
 ```
 
 there is no crypto library in the dependency list and adding one for a hash
-function would be silly — SHA-256 is forty lines of arithmetic, so it is in `sd.cpp`,
-pinned to the published NIST vectors and cross-checked against coreutils on real
-files in the test suite. `curl` is still the only runtime dependency.
+function would be silly — SHA-256 is forty lines of arithmetic, in `sd.cpp` then
+and in `src/main.rs` now, pinned to the published NIST vectors and cross-checked
+against coreutils on real files in the test suite. `curl` is still the only
+runtime dependency.
 
 **what this does and does not prove.** a checksum published next to the file it
 describes proves the two arrived together. it cannot prove *who* wrote them:
@@ -516,14 +547,15 @@ copying.
 so the installer is pinned to its own tag now:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v11.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v12.0.0/install.sh | bash
 ```
 
 a tagged path never changes, so the cache is always correct for the version it
-names. the installer knows which version it is (`SD_VERSION`) and fetches `sd.cpp`
-from that same tag, so a build-from-source produces the program it claims to. a
-test asserts `install.sh` and `sd.cpp` agree, because if they drift you get one
-program from a script promising another.
+names. the installer knows which version it is (`SD_VERSION`) and fetches the
+source from that same tag — `src/main.rs` now, `sd.cpp` back in 7.0.3 — so a
+build-from-source produces the program it claims to. a test asserts `install.sh`
+and the source agree, because if they drift you get one program from a script
+promising another.
 
 it also refuses an asset older than itself now, not just older than what's
 installed — that combination is a cached installer meeting a cached download:
@@ -843,7 +875,7 @@ forward. `update --to` says so before it does it, and the way back is the
 installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v11.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v12.0.0/install.sh | bash
 ```
 
 it also checks on its own, at most **once a day**, and only when you're sitting
@@ -877,17 +909,17 @@ else with `SIMPLEDIR_BIN=/path/to/sd`.
 ## development
 
 ```bash
-make                # build: one g++ invocation over one file
+make                # build: one rustc invocation over one file, static libc when available
 make test           # 645 assertions, real bash subprocesses, no network
-make assets         # dist/ for a release: the binary, sd.cpp, install.sh
+make assets         # dist/: the binary, main.rs, install.sh, SHA256SUMS
 make release        # tag, push, publish with assets attached
 vhs docs/demo.tape  # re-record the gif above (needs vhs + ttyd)
 ```
 
-one source file, `sd.cpp`, and one output, `sd`. the test suite drives the
-compiled binary through the same command-line surface a user does, so a
-behavioural regression in C++ fails the same assertions the python version had
-to pass.
+one source file, `src/main.rs`, and one output, `sd`, with `sdcfg` symlinked to
+it. the test suite drives the compiled binary through the same command-line
+surface a user does, so a behavioural regression in Rust fails the same
+assertions the python version had to pass.
 
 working on it with an AI agent? [`AGENTS.md`](AGENTS.md) has the ground rules
 and the map. feeding a doc-fetching tool? [`llms.txt`](llms.txt).

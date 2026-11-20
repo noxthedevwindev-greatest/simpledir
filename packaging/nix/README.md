@@ -5,16 +5,18 @@
 
 ## what it packages
 
-v6 is one C++ file and a `curl` dependency:
+v12 is one Rust file (`src/main.rs`) and a `curl` dependency:
 
-- `buildPhase` is a single `$CXX -std=c++17 -O2` over `sd.cpp`, statically
-  linked against libstdc++ so the runtime closure doesn't drag in a whole gcc
+- `buildPhase` is a single `rustc --edition 2021 -O -C strip=symbols` over
+  `src/main.rs` with `-C target-feature=+crt-static`, so the runtime closure
+  doesn't drag in a whole toolchain. std-only: no crates, no `Cargo.toml`, no
+  C++ compiler needed
 - `sd` goes in `$out/bin/sd` and `sdcfg` is a **symlink** to it. the program
   picks which half it is from `argv[0]`, so there is one file and two names —
   don't install a second copy
 - `curl` is wrapped onto `PATH` with `wrapProgram` rather than linked, because
-  the standard library has no TLS and `sdcfg update` shells out to it. without
-  the wrapper the update check silently does nothing on a NixOS box
+  the Rust standard library has no TLS and `sdcfg update` shells out to it.
+  without the wrapper the update check silently does nothing on a NixOS box
 
 ## after installing
 
@@ -45,12 +47,13 @@ the one thing that always blocks a first submission is the `hash` in
 
 ```bash
 nix-prefetch-url --unpack \
-  https://github.com/noxthedevwindev-greatest/simpledir/archive/v6.0.0.tar.gz
+  https://github.com/noxthedevwindev-greatest/simpledir/archive/v12.0.0.tar.gz
 ```
 
-or just read it out of the `nixpkgs-review` run and paste it in. a placeholder
+or just read it out of the `nixpkgs-review` run and paste it in. until the
+v12.0.0 tag exists, `package.nix` deliberately uses `lib.fakeHash`: a placeholder
 hash fails the build, it doesn't warn.
 
 `doCheck` is on and runs `tests/run.sh`, which compiles its own stub binaries
-and points every network call at `file://` URLs, so the check phase neither
-needs the network nor a `checkInputs` list beyond bash and a compiler.
+with `rustc` and points every network call at `file://` URLs, so the check phase
+neither needs the network nor a `checkInputs` list beyond bash and rustc.

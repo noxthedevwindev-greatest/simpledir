@@ -1,29 +1,33 @@
 { lib
 , staticStdenv
 , fetchFromGitHub
+, rustc
 , curl
 , makeWrapper
 }:
 
 staticStdenv.mkDerivation (finalAttrs: {
   pname = "simpledir";
-  version = "11.0.0";
+  version = "12.0.0";
 
   src = fetchFromGitHub {
     owner = "noxthedevwindev-greatest";
     repo = "simpledir";
     rev = "v${finalAttrs.version}";
-    # fill this in from the nixpkgs-review output, or:
+    # TODO(v12): the v12.0.0 tag is not published yet. lib.fakeHash makes the
+    # build fail loudly rather than silently reusing a previous release's hash; replace it
+    # with the nixpkgs-review output, or:
     #   nix-prefetch-url --unpack \
-    #     https://github.com/noxthedevwindev-greatest/simpledir/archive/v${version}.tar.gz
-    hash = "sha256-REPLACE_ME_WITH_THE_PREFETCH_HASH";
+    #     https://github.com/noxthedevwindev-greatest/simpledir/archive/v12.0.0.tar.gz
+    hash = lib.fakeHash;
   };
 
   strictDeps = true;
 
   # the update check, `revert` and `sdcfg releases` all shell out to curl: the
-  # C++ standard library has no TLS, and curl is already the install dependency.
-  nativeBuildInputs = [ curl makeWrapper ];
+  # Rust standard library has no TLS, and curl is already the install dependency.
+  # rustc builds the single std-only source file; no Cargo, no crates.
+  nativeBuildInputs = [ rustc curl makeWrapper ];
 
   enableParallelBuilding = true;
 
@@ -34,8 +38,8 @@ staticStdenv.mkDerivation (finalAttrs: {
   # so the fallback the Makefile needs is unnecessary here.
   buildPhase = ''
     runHook preBuild
-    $CXX -std=c++17 -O2 -static -ffunction-sections -fdata-sections \
-      -Wl,--gc-sections -o sd sd.cpp
+    rustc --edition 2021 -O -C strip=symbols -C target-feature=+crt-static \
+      -o sd src/main.rs
     runHook postBuild
   '';
 
@@ -43,7 +47,7 @@ staticStdenv.mkDerivation (finalAttrs: {
 
   checkPhase = ''
     runHook preCheck
-    # the suite needs bash and a compiler (it builds its own stub binaries) and
+    # the suite needs bash and rustc (it builds its own stub binaries) and
     # points every network call at file:// stubs, so nothing leaves the sandbox
     ln -sf $PWD/sd sdcfg
     bash tests/run.sh
@@ -54,7 +58,7 @@ staticStdenv.mkDerivation (finalAttrs: {
     runHook preInstall
     install -Dm755 sd $out/bin/sd
     ln -s sd $out/bin/sdcfg
-    install -Dm644 sd.cpp $out/share/doc/simpledir/sd.cpp
+    install -Dm644 src/main.rs $out/share/doc/simpledir/main.rs
     install -Dm644 README.md $out/share/doc/simpledir/README.md
     install -Dm644 llms.txt $out/share/doc/simpledir/llms.txt
     install -Dm644 install.sh $out/share/doc/simpledir/install.sh
@@ -62,7 +66,7 @@ staticStdenv.mkDerivation (finalAttrs: {
   '';
 
   # `sdcfg update`, `revert` and `releases` run curl through popen, because the
-  # C++ standard library has no TLS. linking curl in would be silly for one
+  # Rust standard library has no TLS. linking curl in would be silly for one
   # `cd`, so it stays a wrapped runtime dependency instead: without this the
   # update check silently does nothing on a NixOS box with no curl on PATH.
   # the wrapper execs with argv[0] preserved, so `sdcfg` still sees its own name

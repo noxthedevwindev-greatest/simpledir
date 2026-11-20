@@ -3,7 +3,7 @@
 # simpledir installer. finds a prebuilt binary for this box, or compiles one,
 # then installs sd + sdcfg and wires your shell rc.
 #
-#   curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v11.0.0/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v12.0.0/install.sh | bash
 #
 # options:
 #   --source        compile from source even if a binary exists
@@ -16,7 +16,7 @@
 #   SIMPLEDIR_RC        which rc file to patch      (default ~/.zshrc or ~/.bashrc)
 #   SIMPLEDIR_PM        force a package manager: yay | pacman | mise
 #   SIMPLEDIR_NO_RC=1   install the binaries, don't touch the rc
-#   SIMPLEDIR_SOURCE_URL  base URL to fetch sd.cpp from when compiling
+#   SIMPLEDIR_SOURCE_URL  base URL to fetch src/main.rs from when compiling
 #   SIMPLEDIR_BASE_URL    where release assets are fetched from
 #
 set -euo pipefail
@@ -31,8 +31,8 @@ BASE="${SIMPLEDIR_BASE_URL:-https://github.com/$OWNER/$REPO}"
 # happened to v7.0.2, and why the question printed nothing. A tagged path never
 # changes, so the cache is always right for the version it names.
 #
-# Keep this in step with VERSION in sd.cpp; a test checks that it is.
-SD_VERSION="11.0.0"
+# Keep this in step with VERSION_BASE in src/main.rs; a test checks that it is.
+SD_VERSION="12.0.0"
 RAW="${SIMPLEDIR_SOURCE_URL:-https://raw.githubusercontent.com/$OWNER/$REPO/v$SD_VERSION}"
 case "$RAW" in */) ;; *) RAW="$RAW/" ;; esac
 BIN_DIR="${SIMPLEDIR_BIN_DIR:-$HOME/.local/bin}"
@@ -124,10 +124,8 @@ ask() { # ask <default>
   return 0
 }
 
-compiler() { # prints the name of a C++ compiler, or nothing
-  if have g++; then echo g++
-  elif have clang++; then echo clang++
-  fi
+compiler() { # prints the name of a Rust compiler, or nothing
+  if have rustc; then echo rustc; fi
 }
 
 # --------------------------------------------------------------- the toolchain
@@ -145,20 +143,20 @@ install_toolchain() {
   fi
   case "${SIMPLEDIR_PM:-}" in
     yay|pacman|mise) ;;
-    "") warn "no C++ compiler found, and no yay, pacman or mise to install one with" ;;
+    "") warn "no Rust compiler found, and no yay, pacman or mise to install one with" ;;
     *) die "SIMPLEDIR_PM must be yay, pacman or mise (got '$SIMPLEDIR_PM')" ;;
   esac
 
-  info "installing a C++ toolchain with $pm"
+  info "installing a Rust toolchain with $pm"
   case "$pm" in
-    yay)    yay -S --noconfirm --needed base-devel ;;
+    yay)    yay -S --noconfirm --needed rust ;;
     pacman)
-      if [ "$(id -u)" -eq 0 ]; then pacman -S --noconfirm --needed base-devel
-      else sudo pacman -S --noconfirm --needed base-devel; fi ;;
-    mise)   mise use -g gcc@latest >/dev/null; mise use -g llvm@latest >/dev/null ;;
-    "")     die "install gcc (Arch: sudo pacman -S base-devel), then re-run with --source" ;;
+      if [ "$(id -u)" -eq 0 ]; then pacman -S --noconfirm --needed rust
+      else sudo pacman -S --noconfirm --needed rust; fi ;;
+    mise)   mise use -g rust@latest >/dev/null ;;
+    "")     die "install rustc (Arch: sudo pacman -S rust), then re-run with --source" ;;
   esac
-  compiler >/dev/null || die "still no C++ compiler. install one and re-run with --source"
+  compiler >/dev/null || die "still no Rust compiler. install one and re-run with --source"
 }
 
 # ----------------------------------------------------------------- fetching it
@@ -288,18 +286,18 @@ source you can read instead:
   if [ "$ok" = "0" ]; then
     install_toolchain
     info "compiling from source (one file, this takes a few seconds)"
-    fetch "$RAW/sd.cpp" "$work/sd.cpp" || { rm -rf "$work"; die "couldn't download sd.cpp from $RAW"; }
+    fetch "$RAW/src/main.rs" "$work/main.rs" || { rm -rf "$work"; die "couldn't download src/main.rs from $RAW"; }
     # static first, same as the Makefile: the dynamic loader costs more than the
-    # program does, and gc-sections drops 800KB of unreferenced libc. A toolchain
-    # without a static libc still gets a working binary, just a slower one.
+    # program does. A toolchain without a static libc still gets a working binary,
+    # just a slower one.
     cxx=$(compiler)
-    if ! "$cxx" -std=c++17 -O2 -static -ffunction-sections -fdata-sections \
-         -Wl,--gc-sections -o "$work/sd" "$work/sd.cpp" 2>/dev/null; then
+    if ! "$cxx" --edition 2021 -O -C strip=symbols -C target-feature=+crt-static \
+         -o "$work/sd" "$work/main.rs" 2>/dev/null; then
       warn "no static libc here, linking dynamically (slightly slower startup)"
-      if ! "$cxx" -std=c++17 -O2 -static-libstdc++ -static-libgcc \
-           -o "$work/sd" "$work/sd.cpp"; then
+      if ! "$cxx" --edition 2021 -O -C strip=symbols \
+           -o "$work/sd" "$work/main.rs"; then
         rm -rf "$work"
-        die "compilation failed. sd.cpp is one file; the full error is above."
+        die "compilation failed. src/main.rs is one file; the full error is above."
       fi
     fi
     "$work/sd" --version >/dev/null || { rm -rf "$work"; die "the build didn't produce a working binary"; }

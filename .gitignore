@@ -1,4 +1,4 @@
-# sd is build output, not source. sd.cpp is the source.
+# sd is build output, not source. src/main.rs is the source.
 sd
 sdcfg
 dist/

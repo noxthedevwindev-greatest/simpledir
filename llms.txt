@@ -1,7 +1,7 @@
 # simpledir
 
 > Directory shortcuts for your shell. Named aliases for the places you actually
-> go, plus frecency for the ones you never named. The next zoxide, in one C++
+> go, plus frecency for the ones you never named. The next zoxide, in one Rust
 > file, with no interpreter and no database.
 
 `sd` moves you and only reads your config. `sdcfg` changes things and never
@@ -20,12 +20,13 @@ Linux. MIT. Zero dependencies beyond `curl` — the binary is linked statically.
 ## Install
 
 ```
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v11.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v12.0.0/install.sh | bash
 ```
 
 The installer detects the platform, downloads a prebuilt `sd-linux-x86_64` or
 `sd-linux-arm64` binary from the latest release, and **compiles from source if
-there isn't one** — installing a toolchain with yay, pacman or mise first if
+there isn't one** — fetching `src/main.rs` from the pinned tag and using `rustc`
+(Rust 2021, std-only), installing it with yay, pacman or mise first if
 necessary. It appends a guarded wrapper block to `~/.bashrc` or `~/.zshrc`
 (chosen from `$SHELL`). Run it again over an existing install and it reports
 what it found and asks whether to repair, uninstall, or cancel.
@@ -39,7 +40,8 @@ There is none, and that is deliberate. Every feature is arithmetic over data
 already on this machine: frecency is a three-day half-life, `sd suggest` counts
 `cd` targets in your shell history, typo suggestions are substring and edit
 distance. No model inference, no generated suggestions, no API keys. The only
-network traffic is the update check. It has two dependencies and works offline.
+network traffic is the update check. Its only runtime dependency is `curl`, and
+it works offline.
 
 ## Commands
 
@@ -207,12 +209,22 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ## Version history
 
+- 12.0.0 — full recode from C++ to Rust: one std-only file, `src/main.rs` (Rust
+  2021, no crates, no Cargo.toml), built with `rustc --edition 2021 -O
+  -C strip=symbols -o sd src/main.rs` and a static libc when available. Same data
+  formats, verbs, flags, shell wrapper, prompts, completions and machine output;
+  `sdcfg` is still a symlink to `sd` and dispatch is still by `argv[0]`. Release
+  assets are now `sd-linux-<arch>`, `main.rs`, `install.sh` and `SHA256SUMS`, and
+  the source fallback fetches `src/main.rs`. SHA-256 is still hand-implemented
+  and pinned to the NIST vectors; the checksum rules are unchanged. Tagline:
+  `rewritten in Rust, same shortcuts`.
 - 11.0.0 — every download is verified against a published SHA256SUMS, by both the
   `curl | bash` installer and `sdcfg update`/`revert`, before anything is run or
   replaced. A missing checksum is a warning; a wrong one is fatal. `sd sha256 <file>`
-  checks a download by hand. SHA-256 is implemented in sd.cpp (no new dependency)
-  and pinned to the NIST vectors. packaging/PKGBUILD now pins a real checksum
-  instead of `SKIP`, and CI runs the suite, audit-tags and check on every push.
+  checks a download by hand. SHA-256 was implemented in `sd.cpp` then (no new
+  dependency) and lives in `src/main.rs` now, pinned to the NIST vectors.
+  packaging/PKGBUILD began pinning a real checksum instead of `SKIP`, and CI
+  runs the suite, audit-tags and check on every push.
 - 10.0.0 — linked fully static and with no iostreams, so a jump went from 1.44ms to
   0.76ms and the only runtime dependency left is curl; the visit throttle now scans
   history.json for a single timestamp instead of parsing the whole log; and `sdcfg
@@ -229,10 +241,11 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
   `sdcfg adapt --accept|--reject` records the verdict. A refusal goes quiet for
   seven days, doubling per rejection up to a year, and `--all` shows the reason.
   Two integers per directory; no model and no inference.
-- 7.0.3 — the installer is pinned to its own tag and fetches `sd.cpp` from that
-  tag too. raw.githubusercontent caches by path, so the 7.0.2 fix was in git and in
-  the API and still not in what `curl … | bash` downloaded. It now also refuses an
-  asset older than itself, not only one older than what is installed.
+- 7.0.3 — the installer is pinned to its own tag and fetches the source from that
+  tag too (`sd.cpp` then, `src/main.rs` now). raw.githubusercontent caches by path,
+  so the 7.0.2 fix was in git and in the API and still not in what `curl … | bash`
+  downloaded. It now also refuses an asset older than itself, not only one older
+  than what is installed.
 - 7.0.2 — the installer asked its repair/uninstall question without printing it
   (written to a read-only fd). `curl | bash` stdin is now closed in the test so the
   `/dev/tty` path is the one exercised, and the prompt must be displayed.
@@ -279,16 +292,16 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 ## Development
 
 ```
-make        # one g++ invocation over one file
+make        # one rustc invocation over one file, static libc when available
 make test   # 645 assertions against the compiled binary, no network
-make assets # dist/ (the binary, sd.cpp, install.sh, mode 755)
+make assets # dist/ (binary, main.rs, install.sh, SHA256SUMS, mode 755)
 make release
 ```
 
 Repository layout:
 
 ```
-sd.cpp              the entire program. installed as `sd`, with `sdcfg` symlinked to it
+src/main.rs         the entire program (Rust 2021, std-only). installed as `sd`, with `sdcfg` symlinked to it
 sd                  build output, gitignored
 install.sh          the curl | bash installer
 tests/run.sh        test suite, plain bash, drives the compiled binary

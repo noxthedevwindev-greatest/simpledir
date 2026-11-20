@@ -25,8 +25,8 @@ Set Padding 16
 Env SIMPLEDIR_CONFIG_DIR "/tmp/simpledir-demo"
 Env SIMPLEDIR_NO_UPDATE_CHECK "1"
 
-# the tagline carries the release: every download is checked against a published
-# checksum, so that is what the recording opens on.
+# the tagline carries the release: rewritten in Rust, same shortcuts, so that is
+# what the recording opens on.
 Type "cd ~ && sdcfg --version" Enter
 Sleep 1200ms
 
@@ -67,17 +67,17 @@ Sleep 1300ms
 Type "sd @desk" Enter
 Sleep 1700ms
 
-# bench: the release before this one was about being fast, and it ships the
-# measuring stick rather than a number you have to take on trust
+# bench: an earlier release was about being fast, and it ships the measuring
+# stick rather than a number you have to take on trust
 Type "clear" Enter
 Sleep 600ms
 Type "cd ~/Projects/simpledir && sdcfg bench --runs 40" Enter
 Sleep 6000ms
 
-# and this one ships the reason to trust it: hash anything yourself
+# and the checksum release shipped the reason to trust it: hash anything yourself
 Type "clear" Enter
 Sleep 600ms
-Type "sd sha256 sd.cpp" Enter
+Type "sd sha256 src/main.rs" Enter
 Sleep 1600ms
 Type "sd sha256 ~/.bashrc" Enter
 Sleep 1500ms

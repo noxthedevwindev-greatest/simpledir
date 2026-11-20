@@ -7,7 +7,22 @@ set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 export SIMPLEDIR_CONFIG_DIR=$(mktemp -d)
-trap 'rm -rf "$SIMPLEDIR_CONFIG_DIR"' EXIT
+
+# Some systems ship an unrelated tool called `sd` in /usr/bin. The wrapper tests
+# need a PATH with every normal command but no `sd`, so `command -v sd` really
+# fails and the wrapper has to prepend its own bindir. A cleanbin of symlinks
+# keeps the rest of the shell intact without masking a real regression.
+CLEANBIN=$(mktemp -d)
+for bindir in /usr/bin /bin /usr/local/bin; do
+  [ -d "$bindir" ] || continue
+  for tool in "$bindir"/*; do
+    [ -f "$tool" ] || continue
+    name=$(basename "$tool")
+    [ "$name" = sd ] && continue
+    [ -e "$CLEANBIN/$name" ] || ln -s "$tool" "$CLEANBIN/$name"
+  done
+done
+trap 'rm -rf "$SIMPLEDIR_CONFIG_DIR" "$CLEANBIN"' EXIT
 
 # two names, one file. the mode is decided by argv[0], exactly like the install.
 SD="$ROOT/sd"
@@ -641,7 +656,7 @@ has "sha256 from stdin" \
 
 # cross-check against coreutils on real files. if these ever disagree, coreutils
 # is right and this is a bug -- which is precisely why the assertions are here.
-for fixture in "$ROOT/sd.cpp" "$ROOT/install.sh" "$ROOT/Makefile" "$ROOT/tests/run.sh"; do
+for fixture in "$ROOT/src/main.rs" "$ROOT/install.sh" "$ROOT/Makefile" "$ROOT/tests/run.sh"; do
   has "sha256 agrees with coreutils on $(basename "$fixture")" \
     "$(sha256sum "$fixture" | awk '{print $1}')" \
     "$(env SIMPLEDIR_CONFIG_DIR="$SH" "$SD" sha256 "$fixture" 2>&1)"
@@ -673,8 +688,8 @@ rm -rf "$SH"
 VER=$(mktemp -d); mkdir -p "$VER/pub/download/v9.0.0" "$VER/cfg"
 ver_asset="sd-linux-$(uname -m | sed -e 's/x86_64/x86_64/' -e 's/aarch64/arm64/')"
 build_ver() { # build_ver <version>
-  g++ -std=c++17 -O1 -o "$VER/pub/download/v9.0.0/$ver_asset" "$ROOT/sd.cpp" \
-      -DVERSION="\"$1\"" 2>/dev/null
+  SIMPLDIR_VERSION="$1" rustc --edition 2021 -O -o "$VER/pub/download/v9.0.0/$ver_asset" \
+      "$ROOT/src/main.rs" 2>/dev/null
 }
 ver_update() { env SIMPLEDIR_CONFIG_DIR="$VER/cfg" SIMPLEDIR_BIN="$VER/installed" \
                  SIMPLEDIR_RELEASE_URL="file://$VER/pub" \
@@ -1129,8 +1144,9 @@ check "unreachable api exits 1" 1 "$CFG" update --check
 
 # self-install: the stub asset is the same source compiled with a bumped
 # VERSION, since sd is a compiled binary now rather than a script to sed
-if command -v g++ >/dev/null 2>&1; then
-  g++ -std=c++17 -O1 -o "$STUBS/candidate" "$ROOT/sd.cpp" -DVERSION='"99.0.0"' 2>/dev/null
+if command -v rustc >/dev/null 2>&1; then
+  SIMPLDIR_VERSION="99.0.0" rustc --edition 2021 -O -o "$STUBS/candidate" \
+    "$ROOT/src/main.rs" 2>/dev/null
 fi
 export SIMPLEDIR_UPDATE_URL="file://$STUBS/api_new.json"
 export SIMPLEDIR_UPDATE_ASSET_URL="file://$STUBS/candidate"
@@ -1167,9 +1183,11 @@ arch=$(uname -m)
 case "$arch" in x86_64|amd64) asset="sd-linux-x86_64" ;; aarch64|arm64) asset="sd-linux-arm64" ;;
   *) asset="sd-linux-$arch" ;; esac
 mkdir -p "$REL/latest/download" "$REL/download/v99.0.0"
-if command -v g++ >/dev/null 2>&1; then
-  g++ -std=c++17 -O1 -o "$REL/latest/download/$asset" "$ROOT/sd.cpp" -DVERSION='"99.0.0"' 2>/dev/null
-  g++ -std=c++17 -O1 -o "$REL/download/v99.0.0/$asset" "$ROOT/sd.cpp" -DVERSION='"99.0.0"' 2>/dev/null
+if command -v rustc >/dev/null 2>&1; then
+  SIMPLDIR_VERSION="99.0.0" rustc --edition 2021 -O -o "$REL/latest/download/$asset" \
+    "$ROOT/src/main.rs" 2>/dev/null
+  SIMPLDIR_VERSION="99.0.0" rustc --edition 2021 -O -o "$REL/download/v99.0.0/$asset" \
+    "$ROOT/src/main.rs" 2>/dev/null
 fi
 contains "the stand-in release runs" "sd 99.0.0" "$REL/latest/download/$asset" --version
 printf '[{"tag_name":"v99.0.0","published_at":"2026-01-01T00:00:00Z","name":"stub"}]\n' > "$REL/api_new.json"
@@ -1515,17 +1533,17 @@ check "generated bash comp is valid bash" 0 bash -n <("$CFG" completions bash)
 check "install.sh parses"        0 bash -n "$ROOT/install.sh"
 # The installer has to survive `curl … | bash`, which is the documented install
 # path and the reason two of these tests exist.
-# install.sh fetches sd.cpp from a pinned tag now, so it carries its own version.
+# install.sh fetches src/main.rs from a pinned tag now, so it carries its own version.
 # If the two drift, a build-from-source install produces a different program than
 # the installer claims — and raw.githubusercontent will not tell you, because it
 # caches by path and happily serves last week's file.
-sd_version=$(sed -n 's/^#define VERSION "\(.*\)"/\1/p' "$ROOT/sd.cpp" | head -1)
+sd_version=$(sed -n 's/^const VERSION_BASE: &str = "\(.*\)";/\1/p' "$ROOT/src/main.rs" | head -1)
 sh_version=$(sed -n 's/^SD_VERSION="\(.*\)"/\1/p' "$ROOT/install.sh" | head -1)
-check "install.sh and sd.cpp agree on the version" 0 test "$sd_version" = "$sh_version"
+check "install.sh and main.rs agree on the version" 0 test "$sd_version" = "$sh_version"
 check "install.sh pins its source url to the tag" 0 grep -q 'REPO/v\$SD_VERSION' "$ROOT/install.sh"
 
 # `--version` has to say which release this is, not just a number.
-hook=$(sed -n 's/^#define TAGLINE "\(.*\)"/\1/p' "$ROOT/sd.cpp" | head -1)
+hook=$(sed -n 's/^const TAGLINE: &str = "\(.*\)";/\1/p' "$ROOT/src/main.rs" | head -1)
 check "the build declares a tagline"  0 test -n "$hook"
 lacks "the tagline isn't the old generic one" "the next zoxide" <<<"$hook"
 check "sd --version shows the tagline"  0 bash -c "'$SD' --version | grep -qF '$hook'"
@@ -1544,8 +1562,8 @@ check   "install.sh rejects junk"  1 bash "$ROOT/install.sh" --nope
 DOWN=$(mktemp -d); mkdir -p "$DOWN/pub/releases/latest/download"
 cp install.sh "$DOWN/i.sh"
 build_asset() { # build_asset <version>
-  g++ -std=c++17 -O1 -o "$DOWN/pub/releases/latest/download/$asset" "$ROOT/sd.cpp" \
-      -DVERSION="\"$1\"" 2>/dev/null
+  SIMPLDIR_VERSION="$1" rustc --edition 2021 -O -o "$DOWN/pub/releases/latest/download/$asset" \
+      "$ROOT/src/main.rs" 2>/dev/null
 }
 down() { env HOME="$DOWN" SHELL=/bin/bash PATH="/usr/bin:/bin" \
            SIMPLEDIR_BASE_URL="file://$DOWN/pub" SIMPLEDIR_SOURCE_URL="file://$ROOT" \
@@ -1588,7 +1606,7 @@ sums_scenario() {
   SUM=$(mktemp -d); mkdir -p "$SUM/pub/releases/latest/download"
   DL="$SUM/pub/releases/latest/download"
   cp install.sh "$SUM/i.sh"
-  sumbuild() { g++ -std=c++17 -O1 -o "$DL/$asset" "$ROOT/sd.cpp" -DVERSION="\"$1\"" 2>/dev/null; }
+  sumbuild() { SIMPLDIR_VERSION="$1" rustc --edition 2021 -O -o "$DL/$asset" "$ROOT/src/main.rs" 2>/dev/null; }
   sumdl() { env HOME="$SUM" SHELL=/bin/bash PATH="/usr/bin:/bin" SIMPLEDIR_NO_RC=1 \
               SIMPLEDIR_BASE_URL="file://$SUM/pub" SIMPLEDIR_SOURCE_URL="file://$ROOT" \
               SIMPLEDIR_NO_UPDATE_CHECK=1 bash "$SUM/i.sh" "$@" </dev/null; }
@@ -1659,7 +1677,7 @@ rm -rf "$SUM"
 check "make assets writes SHA256SUMS" 0 bash -c \
   "make -s -C '$ROOT' assets >/dev/null 2>&1 && test -s '$ROOT/dist/SHA256SUMS'"
 check "it covers the binary"  0 grep -q "$asset"  "$ROOT/dist/SHA256SUMS"
-check "it covers sd.cpp"      0 grep -q 'sd.cpp'    "$ROOT/dist/SHA256SUMS"
+check "it covers main.rs"     0 grep -q 'main.rs'   "$ROOT/dist/SHA256SUMS"
 check "it covers install.sh"  0 grep -q 'install.sh' "$ROOT/dist/SHA256SUMS"
 check "every line is a real sha256 of the file beside it" 0 bash -c \
   "cd '$ROOT/dist' && sha256sum -c --quiet SHA256SUMS"
@@ -1669,8 +1687,8 @@ check "every line is a real sha256 of the file beside it" 0 bash -c \
 # before a fix and then hand that installer a source file from before it too.
 FLOOR=$(mktemp -d); mkdir -p "$FLOOR/pub/releases/latest/download"
 cp install.sh "$FLOOR/i.sh"
-g++ -std=c++17 -O1 -o "$FLOOR/pub/releases/latest/download/$asset" "$ROOT/sd.cpp" \
-    -DVERSION='"6.0.0"' 2>/dev/null
+SIMPLDIR_VERSION="6.0.0" rustc --edition 2021 -O -o "$FLOOR/pub/releases/latest/download/$asset" \
+    "$ROOT/src/main.rs" 2>/dev/null
 out=$(env HOME="$FLOOR" SHELL=/bin/bash PATH="/usr/bin:/bin" \
        SIMPLEDIR_BASE_URL="file://$FLOOR/pub" SIMPLEDIR_SOURCE_URL="file://$ROOT" \
        SIMPLEDIR_NO_UPDATE_CHECK=1 bash "$FLOOR/i.sh" </dev/null 2>&1)
@@ -1788,7 +1806,7 @@ check "rc block defines sd" 0 bash -c "grep -q '^sd()' '$FAKEHOME/withrc/.bashrc
 check "rc block mentions sdcfg" 0 bash -c "grep -q 'never moves you' '$FAKEHOME/withrc/.bashrc'"
 "$CFG" add home "$HOME" >/dev/null
 check "wired shell actually jumps" 0 env -i HOME="$FAKEHOME/withrc" \
-  SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" PATH="/usr/bin:/bin" TERM=dumb \
+  SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" PATH="$CLEANBIN" TERM=dumb \
   bash --noprofile --norc -c "
   source '$FAKEHOME/withrc/.bashrc'
   cd /tmp; sd home; [[ \$PWD == '$HOME' ]]"
@@ -1796,7 +1814,7 @@ check "wired shell actually jumps" 0 env -i HOME="$FAKEHOME/withrc" \
 # runner's PATH. `command -v` would answer "sd" because the rc defines a
 # function of that name; `type -P` asks for the path instead.
 check "wired shell uses the new install" 0 env -i HOME="$FAKEHOME/withrc" \
-  SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" PATH="/usr/bin:/bin" TERM=dumb \
+  SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" PATH="$CLEANBIN" TERM=dumb \
   bash --noprofile --norc -c "
   source '$FAKEHOME/withrc/.bashrc'
   [[ \$(type -P sd) == '$FAKEHOME/withrc/.local/bin/sd' ]]"
@@ -1863,7 +1881,7 @@ check "sd takes a raw path"    0 bash --noprofile --norc -c "
 # Every read-only verb must be forwarded by the wrapper, and the list is a literal
 # in the generated block, so adding a verb without adding it there is easy. Derive
 # the list from the help text instead of hardcoding it in the test.
-read_only=$(sed -n '/^usage: sd </,/^$/p' "$ROOT/sd.cpp" 2>/dev/null | sed -n 's/^  sd \([a-z]*\) .*/\1/p')
+read_only=$("$SD" --help 2>/dev/null | sed -n '/^usage: sd </,/^$/p' | sed -n 's/^  sd \([a-z0-9][a-z0-9]*\) .*/\1/p')
 for verb in $read_only; do
   lacks "the wrapper forwards \`$verb\`" "no alias named '$verb'" bash --noprofile --norc -c "
     source '$wrapper'; command sd $verb 2>&1 || true"
@@ -1959,11 +1977,11 @@ rm -rf "$PT"
 # comment. both it and the quoted form have to define a working `sd`.
 check "quoted eval of init defines sd" 0 bash --noprofile --norc -c "
   eval \"\$($CFG init)\"; [[ \$(type -t sd) == function ]]"
-check "quoted eval of init jumps" 0 bash --noprofile --norc -c "
+check "quoted eval of init jumps" 0 env PATH="$CLEANBIN" bash --noprofile --norc -c "
   eval \"\$($CFG init)\"; cd /tmp; sd home; [[ \$PWD == '$HOME' ]]"
 check "unquoted eval of init defines sd" 0 bash --noprofile --norc -c "
   eval \$($CFG init); [[ \$(type -t sd) == function ]]"
-check "unquoted eval of init jumps" 0 bash --noprofile --norc -c "
+check "unquoted eval of init jumps" 0 env PATH="$CLEANBIN" bash --noprofile --norc -c "
   eval \$($CFG init); cd /tmp; sd home; [[ \$PWD == '$HOME' ]]"
 check "eval of init leaves sdcfg alone" 0 bash --noprofile --norc -c "
   eval \"\$($CFG init)\"; [[ \$(type -t sdcfg) != function ]]"
@@ -1988,7 +2006,7 @@ check "sdcfg is not shadowed"  0 bash --noprofile --norc -c "
 # `command -v` would answer "sd" because the rc defines a function of that name;
 # `type -P` asks for the path instead.
 check "wired shell uses the new install" 0 env -i HOME="$FAKEHOME/withrc" \
-  SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" PATH="/usr/bin:/bin" TERM=dumb \
+  SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" PATH="$CLEANBIN" TERM=dumb \
   bash --noprofile --norc -c "
   source '$wrapper'; [[ \$(type -P sd) == '$ROOT/sd' ]]"
 rm -f "$wrapper"

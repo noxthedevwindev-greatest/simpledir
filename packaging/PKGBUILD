@@ -1,7 +1,7 @@
 # Maintainer: NoxTheDev <https://github.com/noxthedevwindev-greatest>
 # Contributor: Your Name <you@example.com>
 pkgname=simpledir
-pkgver=11.0.0
+pkgver=12.0.0
 pkgrel=1
 pkgdesc="Named directory shortcuts for your shell - a frecency-aware zoxide alternative"
 arch=('x86_64' 'aarch64')
@@ -10,7 +10,7 @@ license=('MIT')
 depends=('curl')
 optdepends=('bash: shell wrapper for bash' 'zsh: shell wrapper for zsh'
             'fzf: interactive picker for `sd i`')
-makedepends=('g++')
+makedepends=('rust')
 # Pinned to the tag's own tarball, with a real checksum.
 #
 # This used to be a git source with `sha256sums=('SKIP')`, which is the AUR
@@ -22,26 +22,34 @@ makedepends=('g++')
 #
 # Bumping a release means regenerating one line:
 #   updpkgsums
+# TODO(v12): the v12.0.0 tag is not published yet, so this is a placeholder.
+# Replace it with the tarball's real sha256 once the tag exists. Keep the
+# entry itself: verifying the bytes makepkg builds from is the whole point.
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('e72e418da843bb9805d476d70029a08810d25d21ba86838274d8be933d6685df')
+sha256sums=('REPLACE_WITH_V12_TARBALL_SHA256')
 # GitHub regenerates these tarballs on occasion, which occasionally changes the
 # hash for an unchanged tag. That is the trade for the guarantee above: a mismatch
 # stops the build loudly instead of quietly installing different bytes.
 
 build() {
   cd "$srcdir/$pkgname"
-  # one source file. linked statically when this system has a static libc,
-  # because the dynamic loader costs more than the program does; falls back to
-  # static libstdc++ (no glibc-static in the runtime closure) if it doesn't.
-  if ! g++ -std=c++17 -O2 -static -ffunction-sections -fdata-sections \
-       -Wl,--gc-sections -o sd sd.cpp 2>/dev/null; then
-    g++ -std=c++17 -O2 -static-libstdc++ -static-libgcc -o sd sd.cpp
+  # one source file, std-only Rust 2021. linked statically when this system
+  # has a static libc, because the dynamic loader costs more than the program
+  # does; fall back to a dynamic link with a note rather than silently shipping
+  # a slower binary.
+  if rustc --edition 2021 -O -C strip=symbols -C target-feature=+crt-static \
+       -o sd src/main.rs 2>/dev/null; then
+    :
+  else
+    echo "note: no static libc here, linking dynamically" >&2
+    rustc --edition 2021 -O -C strip=symbols -o sd src/main.rs
   fi
 }
 
 check() {
   cd "$srcdir/$pkgname"
-  # the suite needs bash and a compiler; it compiles its own stub binaries
+  # the suite needs bash and rustc; it compiles its own stub binaries (legacy
+  # C++ fixtures are optional and skipped when their compiler is absent)
   bash tests/run.sh
 }
 
@@ -49,7 +57,7 @@ package() {
   cd "$srcdir/$pkgname"
   install -Dm755 sd "$pkgdir/usr/bin/sd"
   ln -s sd "$pkgdir/usr/bin/sdcfg"
-  install -Dm644 sd.cpp "$pkgdir/usr/share/doc/$pkgname/sd.cpp"
+  install -Dm644 src/main.rs "$pkgdir/usr/share/doc/$pkgname/main.rs"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
   install -Dm644 llms.txt "$pkgdir/usr/share/doc/$pkgname/llms.txt"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
@@ -59,5 +67,5 @@ package() {
 # anybody's bashrc from a post-install script.
 post_install() {
   echo "run 'sdcfg init >> ~/.bashrc' (or ~/.zshrc) to enable 'sd'"
-  echo "then 'sdcfg migrate' to bring an older config to v2, and 'sdcfg doctor' to check"
+  echo "then 'sdcfg migrate' to bring an older config up to date, and 'sdcfg doctor' to check"
 }

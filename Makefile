@@ -8,36 +8,29 @@ ASSET  ?= sd-linux-$(ARCH)
 # SHA256SUMS` reads the old file while truncating it and writes a line that is
 # wrong by construction. That bug shipped for one release; the test that checks
 # `sha256sum -c SHA256SUMS` in dist/ is what caught it.
-HASHED  ?= $(ASSET) sd.cpp install.sh
+HASHED  ?= $(ASSET) main.rs install.sh
 # What gets uploaded. Both.
 ASSETS ?= $(HASHED) $(SUMS)
 # shipped alongside them. SHA256SUMS is what lets anyone -- and the installer
 # itself -- tell "the bytes we published" from "whatever arrived over the wire".
 SUMS ?= SHA256SUMS
 
-CXXFLAGS ?= -std=c++17 -O2
+RUSTC ?= rustc
+RUSTFLAGS ?= -O -C strip=symbols
 
-# Link everything statically. This is the whole v10 release, and the reason is
-# arithmetic rather than taste: the dynamic loader costs ~650us before main() even
-# starts, which is more than this program spends doing its actual job. Measured
-# over 6 interleaved rounds of 120 runs each, median per jump:
-#
-#   dynamic, as shipped in 9.0.0        1.44 ms
-#   static                             0.83 ms
-#   static + section gc                0.76 ms
-#
-# A resident daemon would have been the obvious way to attack this and is the
-# wrong answer: parsing the frecency log costs ~120us, a socket round trip costs
-# about the same, and `sd name` never reads the log at all. Static also drops the
-# last runtime dependency, so "libstdc++ and curl" becomes just curl.
-#
-# gc-sections matters because a static binary is 3.2MB of libc and libstdc++ with
-# most of it unreferenced; throwing those sections away cuts 800KB and another 70us.
-STATIC_FLAGS = -static -ffunction-sections -fdata-sections -Wl,--gc-sections
+# Link everything statically. This was the whole v10 release, and the reason is
+# arithmetic rather than taste: the dynamic loader costs ~650us before main()
+# even starts, which is more than this program spends doing its actual job.
+# A resident daemon is still the wrong answer: parsing the frecency log costs
+# ~120us, a socket round trip costs about the same, and `sd name` never reads
+# the log at all. Static also drops the last runtime dependency, so "libstdc++
+# and curl" becomes just curl.
+STATIC_FLAGS = -C target-feature=+crt-static
 
-# Not every toolchain ships a static libc. Fall back rather than fail, and say so
-# out loud, because a silently slower build is how you end up benchmarking noise.
-DYNAMIC_FLAGS = -static-libstdc++ -static-libgcc
+# Not every toolchain ships a static libc. Fall back rather than fail, and say
+# so out loud, because a silently slower build is how you end up benchmarking
+# noise.
+DYNAMIC_FLAGS =
 
 .PHONY: all binaries install uninstall test assets release audit-tags check clean
 
@@ -48,12 +41,12 @@ all: binaries
 # names have to exist next to each other for the repo to be usable in place.
 binaries: sd sdcfg
 
-sd: sd.cpp
-	@if $(CXX) $(CXXFLAGS) $(STATIC_FLAGS) -o $@ $< 2>/dev/null; then \
+sd: src/main.rs
+	@if $(RUSTC) --edition 2021 $(RUSTFLAGS) $(STATIC_FLAGS) -o $@ $< 2>/dev/null; then \
 		:; \
 	else \
 		echo "note: this toolchain has no static libc, linking dynamically" >&2; \
-		$(CXX) $(CXXFLAGS) $(DYNAMIC_FLAGS) -o $@ $<; \
+		$(RUSTC) --edition 2021 $(RUSTFLAGS) $(DYNAMIC_FLAGS) -o $@ $<; \
 	fi
 	@echo "built $@ ($$(./sd --version))"
 
@@ -84,8 +77,6 @@ install: binaries
 	echo "wired $(RC)"
 
 uninstall:
-
-uninstall:
 	rm -f $(PREFIX)/sd $(PREFIX)/sdcfg
 	cp -p $(RC) $(RC).bak.$(shell date +%Y%m%d%H%M%S)
 	sed -i '/# >>> simpledir >>>/,/# <<< simpledir <<</d' $(RC)
@@ -98,7 +89,7 @@ assets: sd
 	@rm -rf dist
 	@mkdir -p dist
 	install -m 755 sd "dist/$(ASSET)"
-	install -m 755 sd.cpp dist/sd.cpp
+	install -m 755 src/main.rs dist/main.rs
 	install -m 755 install.sh dist/install.sh
 	@# generated from inside dist/ so the names in it are the bare filenames a
 	@# user sees in the downloads list. `cd && &&` is the portable form; a
@@ -110,9 +101,9 @@ assets: sd
 	@cat dist/$(SUMS)
 
 release: test audit-tags assets
-	@version=$$(sed -n 's/^#define VERSION "\(.*\)"/\1/p' sd.cpp); \
+	@version=$$(sed -n 's/^const VERSION_BASE: &str = "\(.*\)";/\1/p' src/main.rs); \
 	echo "releasing v$$version"; \
-	test -n "$$version" || { echo "could not read VERSION"; exit 1; }; \
+	test -n "$$version" || { echo "could not read VERSION_BASE"; exit 1; }; \
 	git tag -a "v$$version" -m "$$version"; \
 	git push origin "v$$version"; \
 	gh release create "v$$version" --title "v$$version" --generate-notes $(foreach f,$(ASSETS),"dist/$(f)#$(f)")
@@ -127,7 +118,8 @@ test:
 audit-tags:
 	@fail=0; for t in $$(git tag | sort -V); do \
 		c=$$(git rev-list -n1 $$t); \
-		v=$$(git show $$c:sd.cpp 2>/dev/null | sed -n 's/^#define VERSION "\(.*\)"/\1/p' | head -1); \
+		v=$$(git show $$c:src/main.rs 2>/dev/null | sed -n 's/^const VERSION_BASE: &str = "\(.*\)";/\1/p' | head -1); \
+		if [ -z "$$v" ]; then v=$$(git show $$c:sd.cpp 2>/dev/null | sed -n 's/^#define VERSION "\(.*\)"/\1/p' | head -1); fi; \
 		if [ -z "$$v" ]; then v=$$(git show $$c:sd 2>/dev/null | sed -n 's/^VERSION = "\(.*\)"/\1/p' | head -1); fi; \
 		if [ -z "$$v" ]; then v=$$(git show $$c:simpledir 2>/dev/null | sed -n 's/^VERSION = "\(.*\)"/\1/p' | head -1); fi; \
 		want=$${t#v}; \
@@ -140,10 +132,10 @@ audit-tags:
 # `--version` shows the release's own line, so it has to exist and say something.
 # A version number on its own tells you nothing about what you installed.
 check: test audit-tags
-	@hook=$$(sed -n 's/^#define TAGLINE "\(.*\)"/\1/p' sd.cpp | head -1); \
+	@hook=$$(sed -n 's/^const TAGLINE: &str = "\(.*\)";/\1/p' src/main.rs | head -1); \
 	if [ -z "$$hook" ]; then echo "TAGLINE is empty. sd --version would just say a number."; exit 1; fi; \
 	case "$$hook" in the\ next\ zoxide) echo "TAGLINE is still the old generic one"; exit 1;; esac; \
-	printf '  %-9s %s\n' "$$(sed -n 's/^#define VERSION "\(.*\)"/v\1/p' sd.cpp | head -1)" "$$hook"
+	printf '  %-9s %s\n' "$$(sed -n 's/^const VERSION_BASE: &str = "\(.*\)"/v\1/p' src/main.rs | head -1)" "$$hook"
 
 clean:
 	rm -f sd sdcfg

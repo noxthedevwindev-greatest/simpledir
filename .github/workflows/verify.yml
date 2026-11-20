@@ -2,7 +2,7 @@
 # a tag whose commit disagrees with its own version string.
 #
 # The point is not that CI is greener than my laptop. The point is that the two
-# claims this repo makes -- "565 assertions pass" and "every published tag names
+# claims this repo makes -- "645 assertions pass" and "every published tag names
 # the version inside it" -- are checked by something that isn't a person
 # remembering to check them. v1.0.0 shipped four releases with a tag pointing one
 # commit late, and every test stubbed the thing that would have noticed.
@@ -23,8 +23,8 @@ jobs:
       - name: build
         run: make
 
-      # The suite spawns real bash, exercises install.sh against file:// stubs and
-      # builds its own stub binaries with g++, so a compiler has to be present.
+      # The suite spawns real bash and exercises install.sh against file:// stubs;
+      # it also builds legacy C++ fixtures with g++ and Rust stubs with rustc.
       # Nothing here touches the network: the update path is pointed at file://.
       - name: test
         run: make test
@@ -39,12 +39,12 @@ jobs:
       # arriving by accident, and this repo has exactly one source file.
       - name: source is still one file
         run: |
-          lines=$(wc -l < sd.cpp)
-          echo "sd.cpp is $lines lines"
-          [ "$lines" -lt 5000 ] || { echo "sd.cpp got big; is it still one file?"; exit 1; }
+          lines=$(wc -l < src/main.rs)
+          echo "src/main.rs is $lines lines"
+          [ "$lines" -lt 9000 ] || { echo "src/main.rs got big; is it still one file?"; exit 1; }
 
   # Prove the released asset is the thing the source builds. Not bit-identical --
-  # different compilers and libc give different bytes -- but it must be static,
+  # different toolchains and libc give different bytes -- but it must be static,
   # must report the version the tag claims, and must actually jump.
   release-asset:
     runs-on: ubuntu-latest
