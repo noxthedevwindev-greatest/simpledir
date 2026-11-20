@@ -321,6 +321,14 @@ pick_rc() {
 
 marker_re() { printf '%s' "$1" | sed 's/[][\.*^$/]/\\&/g'; }
 
+# The wrapper's own PATH guard is not enough when some unrelated `sd` already
+# exists on the system: `command -v sd` succeeds and the real install loses.
+# Put our bin dir first, inside the same block so uninstall removes it too.
+rc_block() {
+  printf 'export PATH="%s:$PATH"\n' "$BIN_DIR"
+  "$SDCFG" init
+}
+
 wire_rc() {
   if [ -n "${SIMPLEDIR_NO_RC-}" ]; then
     info "skipping rc setup (SIMPLEDIR_NO_RC)"
@@ -334,19 +342,14 @@ wire_rc() {
     cp -p "$rc" "$backup"
     local kept; kept=$(mktemp)
     sed "/$(marker_re "$MARK_BEGIN")/,/$(marker_re "$MARK_END")/d" "$rc" > "$kept"
-    { cat "$kept"; echo; echo "$MARK_BEGIN"; "$SDCFG" init; echo "$MARK_END"; } > "$rc"
+    { cat "$kept"; echo; echo "$MARK_BEGIN"; rc_block; echo "$MARK_END"; } > "$rc"
     rm -f "$kept"
     info "refreshed the wrapper block in $rc (the old one is in $backup)"
   else
-    { echo; echo "$MARK_BEGIN"; "$SDCFG" init; echo "$MARK_END"; } >> "$rc"
+    { echo; echo "$MARK_BEGIN"; rc_block; echo "$MARK_END"; } >> "$rc"
     info "added the wrapper to $rc"
   fi
-
-  case ":$PATH:" in
-    *":$BIN_DIR:"*) ;;
-    *) warn "$BIN_DIR is not in your PATH. add this to your shell rc:"
-       warn "    export PATH=\"$BIN_DIR:\$PATH\"" ;;
-  esac
+  info "put $BIN_DIR first on PATH in $rc"
 }
 
 remove_rc_block() {

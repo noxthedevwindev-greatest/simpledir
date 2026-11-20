@@ -1804,9 +1804,14 @@ check "rc marker appears once" 0 bash -c \
   "[ \$(grep -c '>>> simpledir >>>' '$FAKEHOME/withrc/.bashrc') -eq 1 ]"
 check "rc block defines sd" 0 bash -c "grep -q '^sd()' '$FAKEHOME/withrc/.bashrc'"
 check "rc block mentions sdcfg" 0 bash -c "grep -q 'never moves you' '$FAKEHOME/withrc/.bashrc'"
+contains "rc puts the install dir first on PATH" \
+  "export PATH=\"$FAKEHOME/withrc/.local/bin:\$PATH\"" \
+  cat "$FAKEHOME/withrc/.bashrc"
 "$CFG" add home "$HOME" >/dev/null
+# /usr/bin/sd exists on some machines. The rc's explicit export must win over
+# it, so these deliberately run with a normal PATH rather than the clean one.
 check "wired shell actually jumps" 0 env -i HOME="$FAKEHOME/withrc" \
-  SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" PATH="$CLEANBIN" TERM=dumb \
+  SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" PATH="/usr/bin:/bin" TERM=dumb \
   bash --noprofile --norc -c "
   source '$FAKEHOME/withrc/.bashrc'
   cd /tmp; sd home; [[ \$PWD == '$HOME' ]]"
@@ -1814,7 +1819,7 @@ check "wired shell actually jumps" 0 env -i HOME="$FAKEHOME/withrc" \
 # runner's PATH. `command -v` would answer "sd" because the rc defines a
 # function of that name; `type -P` asks for the path instead.
 check "wired shell uses the new install" 0 env -i HOME="$FAKEHOME/withrc" \
-  SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" PATH="$CLEANBIN" TERM=dumb \
+  SIMPLEDIR_CONFIG_DIR="$SIMPLEDIR_CONFIG_DIR" PATH="/usr/bin:/bin" TERM=dumb \
   bash --noprofile --norc -c "
   source '$FAKEHOME/withrc/.bashrc'
   [[ \$(type -P sd) == '$FAKEHOME/withrc/.local/bin/sd' ]]"

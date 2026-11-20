@@ -492,7 +492,7 @@
           <button class="copy" id="copy" type="button" aria-label="copy install command">copy</button>
         </div>
       </div>
-      <p class="install-note">it works out your platform, downloads a prebuilt binary, or <b>compiles the one Rust file itself</b> with <code>rustc</code> if there isn't one for your architecture. prefer to look before you pipe? that's the right instinct — <code>curl … -o install.sh</code>, then <code>less install.sh &amp;&amp; bash install.sh</code>.</p>
+      <p class="install-note">it works out your platform, downloads a prebuilt binary, or <b>compiles the one Rust file itself</b> with <code>rustc</code> if there isn't one for your architecture. the rc block puts <code>~/.local/bin</code> first on <code>PATH</code>, so an unrelated <code>sd</code> elsewhere can't win. prefer to look before you pipe? that's the right instinct — <code>curl … -o install.sh</code>, then <code>less install.sh &amp;&amp; bash install.sh</code>.</p>
     </div>
   </div>
 </header>

@@ -94,7 +94,8 @@ one command. it works out your platform, downloads a prebuilt binary, or
 **compiles the one source file itself** when there isn't one for your
 architecture — installing a toolchain with **yay** (then pacman, then mise) if
 you have no compiler. either way you get `sd` plus an `sdcfg` symlink in
-`~/.local/bin` and a wired-up shell rc.
+`~/.local/bin` and a wired-up shell rc that puts that directory first on
+`PATH`, so an unrelated `sd` elsewhere can't win.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v12.0.0/install.sh | bash
