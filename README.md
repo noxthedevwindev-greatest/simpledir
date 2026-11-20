@@ -1,9 +1,8 @@
 > [!IMPORTANT]
-> **paused — i'm on holiday.** issues and pull requests will sit unread for a
-> while, so please don't wait on me. nothing is broken: the releases stay up,
-> `curl | bash` and `sdcfg update` keep working, and every download still checks
-> out against its published `SHA256SUMS`. sorry for the inconvenience — i'll pick
-> this back up when i'm home.
+> **still on holiday, but v12.0.0 is out.** the pause issue is closed, and this
+> release is a present for your patience. `curl | bash` and `sdcfg update` keep
+> working, and every download still checks out against its published
+> `SHA256SUMS`. issues and pull requests will wait until i'm home.
 
 <p align="center">
   <img src="docs/demo.gif" width="820" alt="sd demo: bind a name, jump to it, group with tags, hash a file, and find a directory you never named">
