@@ -4,11 +4,17 @@ OWNER  ?= noxthedevwindev-greatest
 REPO   ?= simpledir
 ARCH   ?= $(shell uname -m | sed -e 's/x86_64/x86_64/' -e 's/aarch64/arm64/')
 ASSET  ?= sd-linux-$(ARCH)
+VERSION ?= $(shell sed -n 's/^const VERSION_BASE: &str = "\(.*\)";/\1/p' src/main.rs)
+# A hand-downloaded raw asset loses its POSIX mode on the way through GitHub:
+# the browser and the API hand back 0644. This tarball carries 0755 files and
+# the sdcfg symlink, so it is the asset for people who don't run install.sh.
+TARBALL ?= simpledir-v$(VERSION)-linux-$(ARCH).tar.gz
+STAGE   ?= simpledir-v$(VERSION)-linux-$(ARCH)
 # What gets hashed. The sums file is NOT in here -- `sha256sum ... SHA256SUMS >
 # SHA256SUMS` reads the old file while truncating it and writes a line that is
 # wrong by construction. That bug shipped for one release; the test that checks
 # `sha256sum -c SHA256SUMS` in dist/ is what caught it.
-HASHED  ?= $(ASSET) main.rs install.sh
+HASHED  ?= $(ASSET) $(TARBALL) main.rs install.sh
 # What gets uploaded. Both.
 ASSETS ?= $(HASHED) $(SUMS)
 # shipped alongside them. SHA256SUMS is what lets anyone -- and the installer
@@ -91,6 +97,12 @@ assets: sd
 	install -m 755 sd "dist/$(ASSET)"
 	install -m 755 src/main.rs dist/main.rs
 	install -m 755 install.sh dist/install.sh
+	@rm -rf "dist/$(STAGE)"
+	@mkdir -p "dist/$(STAGE)"
+	@install -m 755 sd "dist/$(STAGE)/sd"
+	@ln -sf sd "dist/$(STAGE)/sdcfg"
+	@tar -czf "dist/$(TARBALL)" -C dist "$(STAGE)"
+	@rm -rf "dist/$(STAGE)"
 	@# generated from inside dist/ so the names in it are the bare filenames a
 	@# user sees in the downloads list. `cd && &&` is the portable form; a
 	@# subshell keeps it from leaking into the caller's directory.

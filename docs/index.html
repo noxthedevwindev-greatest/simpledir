@@ -476,7 +476,7 @@
       <span class="badge">linux only</span>
       <span class="badge">statically linked</span>
       <span class="badge">curl is the <b>only</b> dependency</span>
-      <span class="badge">707 tests</span>
+      <span class="badge">711 tests</span>
     </div>
 
     <div class="install">
@@ -491,7 +491,7 @@
           <button class="copy" id="copy" type="button" aria-label="copy install command">copy</button>
         </div>
       </div>
-      <p class="install-note">it works out your platform, downloads a prebuilt binary, or <b>compiles the one Rust file itself</b> with <code>rustc</code> if there isn't one for your architecture. the rc block puts <code>~/.local/bin</code> first on <code>PATH</code>, so an unrelated <code>sd</code> elsewhere can't win. prefer to look before you pipe? that's the right instinct — <code>curl … -o install.sh</code>, then <code>less install.sh &amp;&amp; bash install.sh</code>.</p>
+      <p class="install-note">it works out your platform, downloads a prebuilt binary, or <b>compiles the one Rust file itself</b> with <code>rustc</code> if there isn't one for your architecture. the rc block puts <code>~/.local/bin</code> first on <code>PATH</code>, so an unrelated <code>sd</code> elsewhere can't win. prefer to look before you pipe? that's the right instinct — <code>curl … -o install.sh</code>, then <code>less install.sh &amp;&amp; bash install.sh</code>. downloading by hand? github strips the executable bit from raw assets: run <code>chmod +x sd</code>, or take the <code>.tar.gz</code> asset, which keeps <code>0755</code> and the <code>sdcfg</code> symlink.</p>
     </div>
   </div>
 </header>
@@ -722,7 +722,7 @@ simpledir at a glance:
         </div>
         <div class="feat">
           <span class="ic">✓</span>
-          <h3>707 assertions</h3>
+          <h3>711 assertions</h3>
           <p>the suite drives the compiled binary through <b>the same command line you do</b>, in real bash subprocesses, with no network. it must be green before anything ships.</p>
         </div>
       </div>

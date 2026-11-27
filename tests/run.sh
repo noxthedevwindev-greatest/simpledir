@@ -1755,13 +1755,24 @@ check "and the install still happens" 0 bash -c \
 rm -rf "$SUM"
 
 # and `make assets` really does produce one, covering every asset it ships
+assets_version=$(sed -n 's/^const VERSION_BASE: &str = "\(.*\)";/\1/p' "$ROOT/src/main.rs" | head -1)
+assets_arch=$(uname -m | sed -e 's/x86_64/x86_64/' -e 's/aarch64/arm64/')
+assets_tarball="simpledir-v$assets_version-linux-$assets_arch.tar.gz"
 check "make assets writes SHA256SUMS" 0 bash -c \
   "make -s -C '$ROOT' assets >/dev/null 2>&1 && test -s '$ROOT/dist/SHA256SUMS'"
 check "it covers the binary"  0 grep -q "$asset"  "$ROOT/dist/SHA256SUMS"
+check "it covers the tarball" 0 grep -q "$assets_tarball" "$ROOT/dist/SHA256SUMS"
 check "it covers main.rs"     0 grep -q 'main.rs'   "$ROOT/dist/SHA256SUMS"
 check "it covers install.sh"  0 grep -q 'install.sh' "$ROOT/dist/SHA256SUMS"
 check "every line is a real sha256 of the file beside it" 0 bash -c \
   "cd '$ROOT/dist' && sha256sum -c --quiet SHA256SUMS"
+# GitHub hands back raw release assets as 0644. The tarball is the one a human
+# can download and run without knowing that, so check the bits it carries.
+check "the tarball exists" 0 test -s "$ROOT/dist/$assets_tarball"
+check "the tarball keeps sd executable" 0 bash -c \
+  "tar -tvzf '$ROOT/dist/$assets_tarball' | grep -qE '^-rwxr-xr-x .*/sd$'"
+check "the tarball carries an sdcfg symlink" 0 bash -c \
+  "tar -tvzf '$ROOT/dist/$assets_tarball' | grep -qE '^l.*sdcfg -> sd$'"
 
 # the other floor: an asset older than the installer, with nothing installed at
 # all. raw.githubusercontent caches by path, so it will serve an install.sh from

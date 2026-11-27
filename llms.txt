@@ -29,7 +29,10 @@ there isn't one** — fetching `src/main.rs` from the pinned tag and using `rust
 (Rust 2021, std-only), installing it with yay, pacman or mise first if
 necessary. It appends a guarded wrapper block to `~/.bashrc` or `~/.zshrc`
 (chosen from `$SHELL`). Run it again over an existing install and it reports
-what it found and asks whether to repair, uninstall, or cancel.
+what it found and asks whether to repair, uninstall, or cancel. GitHub serves
+raw release assets as `0644`; a manual binary download needs `chmod +x sd`, or
+use the `simpledir-v<version>-linux-<arch>.tar.gz` asset, which preserves 0755
+and the `sdcfg` symlink.
 
 `bash install.sh --source` forces the compile path, `--uninstall` reverses it.
 `SIMPLEDIR_BIN_DIR`, `SIMPLEDIR_RC`, `SIMPLEDIR_PM`, `SIMPLEDIR_NO_RC=1`.
@@ -305,7 +308,7 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ```
 make        # one rustc invocation over one file, static libc when available
-make test   # 707 assertions against the compiled binary, no network
+make test   # 711 assertions against the compiled binary, no network
 make assets # dist/ (binary, main.rs, install.sh, SHA256SUMS, mode 755)
 make release
 ```

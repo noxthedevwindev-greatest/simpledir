@@ -161,7 +161,7 @@ you. keep it that way — the split is the whole ergonomic argument, and it mean
 ## before you touch anything
 
 ```bash
-make test     # 707 assertions, spawns real bash to verify the wrapper
+make test     # 711 assertions, spawns real bash to verify the wrapper
 make check    # test + audit-tags + tagline check
 ```
 
@@ -277,6 +277,10 @@ gh release create v13.0.0 --title "v13.0.0 — see it all, tidy it up" --notes "
   and moving it back to an ancestor loses no history.
 - the release title starts with the version, then a short hook: `v6.1.0 — one
   curl and you're done`.
-- assets are `sd-linux-<arch>` (the binary), `main.rs` and `install.sh`, all mode
-  755. the installer looks for `sd-linux-x86_64` or `sd-linux-arm64` under
-  `releases/latest/download/` and compiles from source when it finds neither.
+- assets are `sd-linux-<arch>` (the binary), `simpledir-vX.Y.Z-linux-<arch>.tar.gz`
+  (the binary plus the `sdcfg` symlink, modes intact), `main.rs`, `install.sh`
+  and `SHA256SUMS`, all mode 755 in `dist/`. GitHub strips POSIX modes from raw
+  downloads, so the tarball is what a human should grab and a raw binary needs
+  `chmod +x`. the installer looks for `sd-linux-x86_64` or `sd-linux-arm64`
+  under `releases/latest/download/`, chmods it itself, and compiles from source
+  when it finds neither.

@@ -103,6 +103,11 @@ curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/
 less install.sh && bash install.sh
 ```
 
+downloading the binary by hand? github serves release assets as `0644`, so give
+it the execute bit yourself (`chmod +x sd`), or take the
+`simpledir-v13.0.0-linux-<arch>.tar.gz` asset instead — it carries `sd` and the
+`sdcfg` symlink with their modes intact. `install.sh` already does this for you.
+
 `bash install.sh --uninstall` removes both binaries and the rc block (your
 aliases in `~/.simpledir/config.json` stay). installer knobs:
 `SIMPLEDIR_BIN_DIR`, `SIMPLEDIR_RC`, `SIMPLEDIR_PM`, `SIMPLEDIR_NO_RC=1`.
@@ -336,6 +341,9 @@ says, without a daemon, a database or anything that guesses:
 - the shell wrapper's forwarded verbs and both completion scripts are generated
   from the dispatch sets instead of copied as literals, so the next verb can't
   quietly disappear
+- releases now also ship a `simpledir-v13.0.0-linux-<arch>.tar.gz` with `sd` and
+  the `sdcfg` symlink at mode `0755`, because GitHub returns raw assets as
+  `0644`; the checksum file covers it too
 
 all of it is arithmetic over the json files already on your machine. no model,
 no inference, no new dependency, and the config and history formats are unchanged.
@@ -968,7 +976,7 @@ else with `SIMPLEDIR_BIN=/path/to/sd`.
 
 ```bash
 make                # build: one rustc invocation over one file, static libc when available
-make test           # 707 assertions, real bash subprocesses, no network
+make test           # 711 assertions, real bash subprocesses, no network
 make assets         # dist/: the binary, main.rs, install.sh, SHA256SUMS
 make release        # tag, push, publish with assets attached
 vhs docs/demo.tape  # record a demo (needs vhs + ttyd)
