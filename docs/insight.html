@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Insight — simpledir</title>
+<meta name="description" content="sd recent, sd stats, sdcfg tidy and tag-aware renames.">
+<meta name="theme-color" content="#100a1f">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%23100a1f'/><text x='50' y='72' font-size='58' font-family='monospace' font-weight='700' fill='%23a98fff' text-anchor='middle'>sd</text></svg>">
+<link rel="stylesheet" href="site.css">
+<script src="site.js" defer></script>
+</head>
+<body>
+<header class="topbar" id="topbar">
+  <div class="wrap nav">
+    <a class="brand" href="index.html" aria-label="simpledir home">
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <path fill="#fff" d="M3 7h9l2 3h15v4H3z"/>
+        <path fill="rgba(255,255,255,.4)" d="M3 14h26v11H3z"/>
+        <path fill="#a98fff" d="M3 13h26v2H3z"/>
+        <text x="16" y="23" font-family="monospace" font-size="8" font-weight="700" fill="#100a1f" text-anchor="middle">sd</text>
+      </svg>
+      <span class="brand-name">simpledir</span>
+    </a>
+    <nav class="nav-links" aria-label="Main">
+      <a href="about.html" data-page="about.html" aria-label="About page">About</a>
+      <a href="commands.html" data-page="commands.html" aria-label="Commands page">Commands</a>
+      <a href="benchmarks.html" data-page="benchmarks.html" aria-label="Benchmarks page">Benchmarks</a>
+      <a href="insight.html" data-page="insight.html" aria-label="Insight page">Insight</a>
+      <a href="verified.html" data-page="verified.html" aria-label="Verified page">Verified</a>
+      <a href="install.html" data-page="install.html" aria-label="Docs page">Docs</a>
+      <a href="releases.html" data-page="releases.html" aria-label="Releases page">Releases</a>
+      <a href="community.html" data-page="community.html" aria-label="Community page">Community</a>
+    </nav>
+    <div class="nav-actions">
+      <a class="nav-github" href="https://github.com/noxthedevwindev-greatest/simpledir" target="_blank" rel="noopener">GitHub</a>
+      <a class="nav-cta" href="install.html">Install</a>
+      <details class="mobile-menu" id="mobile-menu">
+        <summary aria-label="Open the menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></summary>
+        <ul>
+          <li><a href="index.html" data-page="index.html">Home</a></li>
+          <li><a href="about.html" data-page="about.html">About</a></li>
+          <li><a href="commands.html" data-page="commands.html">Commands</a></li>
+          <li><a href="benchmarks.html" data-page="benchmarks.html">Benchmarks</a></li>
+          <li><a href="insight.html" data-page="insight.html">Insight</a></li>
+          <li><a href="zoxide.html" data-page="zoxide.html">zoxide</a></li>
+          <li><a href="verified.html" data-page="verified.html">Verified</a></li>
+          <li><a href="install.html" data-page="install.html">Install</a></li>
+          <li><a href="releases.html" data-page="releases.html">Releases</a></li>
+          <li><a href="community.html" data-page="community.html">Community</a></li>
+          <li><a href="gallery.html" data-page="gallery.html">Gallery</a></li>
+          <li><a href="contributors.html" data-page="contributors.html">Contributors</a></li>
+        </ul>
+      </details>
+    </div>
+  </div>
+</header>
+<main>
+  <section class="page-intro">
+    <div class="wrap">
+      <span class="crumb"><a href="index.html">simpledir</a> / v13</span>
+      <h1>See it all, <span class="accent">tidy it up.</span></h1>
+      <p class="lede">The new read-only views show what your visit log knows, and one atomic cleanup keeps it honest.</p>
+    </div>
+  </section>
+  <section class="page">
+    <div class="wrap">
+      <p class="section-label">v13 highlights</p>
+      <h2 class="section-title">See it all, tidy it up.</h2>
+      <p class="section-intro"><code>sd top</code> ranks by frecency. <code>sd recent</code> answers the other question — where you were most recently — and <code>sd stats</code> reports the shape of the whole setup in one screen.</p>
+      <div class="terminal">
+        <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="term-title">recent / stats</span></div>
+<pre><span class="p">$</span> <span class="c">sd recent --top 3</span>
+3 directories, newest visit first:
+
+  just now  ./src/neovim-config   [named]
+  12m ago  ./Projects/simpledir
+   3d ago  ./old-scratch          [gone]
+
+<span class="p">$</span> <span class="c">sd stats</span>
+simpledir at a glance:
+
+  aliases: 24 (2 missing)
+  tags: 3 (1 stale member)
+  history: 112 (104 alive, 8 dead)
+  recording: on
+  clean up: sdcfg tidy --dry-run</pre>
+      </div>
+      <div class="grid-2">
+        <div class="card"><h3>Read-only views</h3><p><code>sd recent</code> and <code>sd stats</code> never write. Both take <code>--json</code>, so scripts get numbers instead of words.</p></div>
+        <div class="card"><h3>One atomic cleanup</h3><p><code>sdcfg tidy --dry-run</code> shows the plan; <code>--yes</code> unbinds dead aliases, drops stale tag members and forgets dead visits.</p></div>
+        <div class="card"><h3>Tags stay in step</h3><p><code>sdcfg rename --tags</code>, <code>sdcfg rm --prune-tags</code> and <code>sdcfg tag @old --rename @new</code> keep names and groups together.</p></div>
+        <div class="card"><h3>Verbs can't vanish</h3><p>The shell wrapper's forwarded verbs and both completion scripts are generated from the dispatch sets, so a new verb can't quietly disappear.</p></div>
+      </div>
+    </div>
+  </section>
+</main>
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div>
+        <h3>Who makes it</h3>
+        <p>simpledir is built by NoxTheDev and contributors in public. Every change is on GitHub.</p>
+        <a href="contributors.html">Contributors →</a>
+      </div>
+      <div>
+        <h3>Licences</h3>
+        <p>simpledir is MIT licensed. Use it, change it, ship it. No strings attached.</p>
+        <a href="https://github.com/noxthedevwindev-greatest/simpledir/blob/main/LICENSE" target="_blank" rel="noopener">MIT licence →</a>
+      </div>
+      <div>
+        <h3>Privacy</h3>
+        <p>This site sets no cookies, has no analytics and loads nothing from third parties except GitHub links.</p>
+        <a href="verified.html">How downloads are checked →</a>
+      </div>
+    </div>
+    <div class="foot-end">
+      <p>Made in the open, in Rust.</p>
+      <nav>
+        <a href="https://github.com/noxthedevwindev-greatest/simpledir" target="_blank" rel="noopener">github</a>
+        <a href="releases.html">releases</a>
+        <a href="https://github.com/noxthedevwindev-greatest/simpledir/blob/main/AGENTS.md" target="_blank" rel="noopener">contributing</a>
+        <a href="commands.html">command reference</a>
+      </nav>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

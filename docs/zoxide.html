@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>zoxide — simpledir</title>
+<meta name="description" content="How simpledir compares to zoxide and how to import its directories.">
+<meta name="theme-color" content="#100a1f">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%23100a1f'/><text x='50' y='72' font-size='58' font-family='monospace' font-weight='700' fill='%23a98fff' text-anchor='middle'>sd</text></svg>">
+<link rel="stylesheet" href="site.css">
+<script src="site.js" defer></script>
+</head>
+<body>
+<header class="topbar" id="topbar">
+  <div class="wrap nav">
+    <a class="brand" href="index.html" aria-label="simpledir home">
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <path fill="#fff" d="M3 7h9l2 3h15v4H3z"/>
+        <path fill="rgba(255,255,255,.4)" d="M3 14h26v11H3z"/>
+        <path fill="#a98fff" d="M3 13h26v2H3z"/>
+        <text x="16" y="23" font-family="monospace" font-size="8" font-weight="700" fill="#100a1f" text-anchor="middle">sd</text>
+      </svg>
+      <span class="brand-name">simpledir</span>
+    </a>
+    <nav class="nav-links" aria-label="Main">
+      <a href="about.html" data-page="about.html" aria-label="About page">About</a>
+      <a href="commands.html" data-page="commands.html" aria-label="Commands page">Commands</a>
+      <a href="benchmarks.html" data-page="benchmarks.html" aria-label="Benchmarks page">Benchmarks</a>
+      <a href="insight.html" data-page="insight.html" aria-label="Insight page">Insight</a>
+      <a href="verified.html" data-page="verified.html" aria-label="Verified page">Verified</a>
+      <a href="install.html" data-page="install.html" aria-label="Docs page">Docs</a>
+      <a href="releases.html" data-page="releases.html" aria-label="Releases page">Releases</a>
+      <a href="community.html" data-page="community.html" aria-label="Community page">Community</a>
+    </nav>
+    <div class="nav-actions">
+      <a class="nav-github" href="https://github.com/noxthedevwindev-greatest/simpledir" target="_blank" rel="noopener">GitHub</a>
+      <a class="nav-cta" href="install.html">Install</a>
+      <details class="mobile-menu" id="mobile-menu">
+        <summary aria-label="Open the menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></summary>
+        <ul>
+          <li><a href="index.html" data-page="index.html">Home</a></li>
+          <li><a href="about.html" data-page="about.html">About</a></li>
+          <li><a href="commands.html" data-page="commands.html">Commands</a></li>
+          <li><a href="benchmarks.html" data-page="benchmarks.html">Benchmarks</a></li>
+          <li><a href="insight.html" data-page="insight.html">Insight</a></li>
+          <li><a href="zoxide.html" data-page="zoxide.html">zoxide</a></li>
+          <li><a href="verified.html" data-page="verified.html">Verified</a></li>
+          <li><a href="install.html" data-page="install.html">Install</a></li>
+          <li><a href="releases.html" data-page="releases.html">Releases</a></li>
+          <li><a href="community.html" data-page="community.html">Community</a></li>
+          <li><a href="gallery.html" data-page="gallery.html">Gallery</a></li>
+          <li><a href="contributors.html" data-page="contributors.html">Contributors</a></li>
+        </ul>
+      </details>
+    </div>
+  </div>
+</header>
+<main>
+  <section class="page-intro">
+    <div class="wrap">
+      <span class="crumb"><a href="index.html">simpledir</a> / alternatives</span>
+      <h1>It replaces <span class="accent">zoxide.</span></h1>
+      <p class="lede">Same frecency idea, same unnamed directories — plus names you choose and a config you can read.</p>
+    </div>
+  </section>
+  <section class="page">
+    <div class="wrap">
+      <p class="section-label">Alternatives</p>
+      <h2 class="section-title">It replaces zoxide.</h2>
+      <p class="section-intro"><a href="https://github.com/ajeetdsouza/zoxide" target="_blank" rel="noopener">zoxide</a> is a great tool and this is a drop-in replacement: same frecency idea, same "remember a directory I never named" behaviour. It doesn't conflict, so you can run both and compare.</p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th></th><th>zoxide</th><th>simpledir</th></tr></thead>
+          <tbody>
+            <tr><td class="dim">remembers dirs you never named</td><td class="dim">frecency-scored</td><td>frecency-scored, same half-life idea</td></tr>
+            <tr><td class="dim">remembers dirs you <em>named</em></td><td class="dim">no</td><td><strong>yes — that's the point</strong></td></tr>
+            <tr><td class="dim">state to maintain</td><td class="dim">sqlite db + daemon + shell hooks</td><td>two JSON files</td></tr>
+            <tr><td class="dim">config you can read and hand-edit</td><td class="dim">no</td><td>yes</td></tr>
+            <tr><td class="dim">your shell history</td><td class="dim">ignored</td><td>mined by <code>sd suggest</code></td></tr>
+            <tr><td class="dim">per-jump cost</td><td class="dim">sqlite query + daemon round trip</td><td class="num">0.36 ms, measured</td></tr>
+            <tr><td class="dim">coming from zoxide</td><td class="dim">—</td><td><code>sdcfg zoxide</code> imports what it knows</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="parity-note">Your aliases are data, not installation — they stay in <code>~/.simpledir/config.json</code> whether or not the program is still there.</p>
+    </div>
+  </section>
+</main>
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div>
+        <h3>Who makes it</h3>
+        <p>simpledir is built by NoxTheDev and contributors in public. Every change is on GitHub.</p>
+        <a href="contributors.html">Contributors →</a>
+      </div>
+      <div>
+        <h3>Licences</h3>
+        <p>simpledir is MIT licensed. Use it, change it, ship it. No strings attached.</p>
+        <a href="https://github.com/noxthedevwindev-greatest/simpledir/blob/main/LICENSE" target="_blank" rel="noopener">MIT licence →</a>
+      </div>
+      <div>
+        <h3>Privacy</h3>
+        <p>This site sets no cookies, has no analytics and loads nothing from third parties except GitHub links.</p>
+        <a href="verified.html">How downloads are checked →</a>
+      </div>
+    </div>
+    <div class="foot-end">
+      <p>Made in the open, in Rust.</p>
+      <nav>
+        <a href="https://github.com/noxthedevwindev-greatest/simpledir" target="_blank" rel="noopener">github</a>
+        <a href="releases.html">releases</a>
+        <a href="https://github.com/noxthedevwindev-greatest/simpledir/blob/main/AGENTS.md" target="_blank" rel="noopener">contributing</a>
+        <a href="commands.html">command reference</a>
+      </nav>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

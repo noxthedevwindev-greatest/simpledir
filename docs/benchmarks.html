@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Benchmarks — simpledir</title>
+<meta name="description" content="Measured jump latency, startup floor, and why there is no daemon.">
+<meta name="theme-color" content="#100a1f">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%23100a1f'/><text x='50' y='72' font-size='58' font-family='monospace' font-weight='700' fill='%23a98fff' text-anchor='middle'>sd</text></svg>">
+<link rel="stylesheet" href="site.css">
+<script src="site.js" defer></script>
+</head>
+<body>
+<header class="topbar" id="topbar">
+  <div class="wrap nav">
+    <a class="brand" href="index.html" aria-label="simpledir home">
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <path fill="#fff" d="M3 7h9l2 3h15v4H3z"/>
+        <path fill="rgba(255,255,255,.4)" d="M3 14h26v11H3z"/>
+        <path fill="#a98fff" d="M3 13h26v2H3z"/>
+        <text x="16" y="23" font-family="monospace" font-size="8" font-weight="700" fill="#100a1f" text-anchor="middle">sd</text>
+      </svg>
+      <span class="brand-name">simpledir</span>
+    </a>
+    <nav class="nav-links" aria-label="Main">
+      <a href="about.html" data-page="about.html" aria-label="About page">About</a>
+      <a href="commands.html" data-page="commands.html" aria-label="Commands page">Commands</a>
+      <a href="benchmarks.html" data-page="benchmarks.html" aria-label="Benchmarks page">Benchmarks</a>
+      <a href="insight.html" data-page="insight.html" aria-label="Insight page">Insight</a>
+      <a href="verified.html" data-page="verified.html" aria-label="Verified page">Verified</a>
+      <a href="install.html" data-page="install.html" aria-label="Docs page">Docs</a>
+      <a href="releases.html" data-page="releases.html" aria-label="Releases page">Releases</a>
+      <a href="community.html" data-page="community.html" aria-label="Community page">Community</a>
+    </nav>
+    <div class="nav-actions">
+      <a class="nav-github" href="https://github.com/noxthedevwindev-greatest/simpledir" target="_blank" rel="noopener">GitHub</a>
+      <a class="nav-cta" href="install.html">Install</a>
+      <details class="mobile-menu" id="mobile-menu">
+        <summary aria-label="Open the menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></summary>
+        <ul>
+          <li><a href="index.html" data-page="index.html">Home</a></li>
+          <li><a href="about.html" data-page="about.html">About</a></li>
+          <li><a href="commands.html" data-page="commands.html">Commands</a></li>
+          <li><a href="benchmarks.html" data-page="benchmarks.html">Benchmarks</a></li>
+          <li><a href="insight.html" data-page="insight.html">Insight</a></li>
+          <li><a href="zoxide.html" data-page="zoxide.html">zoxide</a></li>
+          <li><a href="verified.html" data-page="verified.html">Verified</a></li>
+          <li><a href="install.html" data-page="install.html">Install</a></li>
+          <li><a href="releases.html" data-page="releases.html">Releases</a></li>
+          <li><a href="community.html" data-page="community.html">Community</a></li>
+          <li><a href="gallery.html" data-page="gallery.html">Gallery</a></li>
+          <li><a href="contributors.html" data-page="contributors.html">Contributors</a></li>
+        </ul>
+      </details>
+    </div>
+  </div>
+</header>
+<main>
+  <section class="page-intro">
+    <div class="wrap">
+      <span class="crumb"><a href="index.html">simpledir</a> / numbers</span>
+      <h1>Numbers, <span class="accent">not adjectives.</span></h1>
+      <p class="lede">There is a measuring stick in the box. <code>sdcfg bench</code> measures the real binary on your machine, right now.</p>
+    </div>
+  </section>
+  <section class="page">
+    <div class="wrap">
+      <p class="section-label">Benchmarks</p>
+      <h2 class="section-title">Numbers, not adjectives.</h2>
+      <p class="section-intro">There's a measuring stick in the box rather than a number you have to take on trust. <code>sdcfg bench</code> forks the real binary and the floor twice, keeps the faster, and reports the median of 200 runs.</p>
+      <div class="stats">
+        <div class="stat"><div class="v">0.36<small> ms</small></div><div class="l">a jump, median of 200 forks</div></div>
+        <div class="stat"><div class="v">+0.07<small> ms</small></div><div class="l">over just starting a process</div></div>
+        <div class="stat"><div class="v">1</div><div class="l">source file, ~5,400 lines</div></div>
+        <div class="stat"><div class="v">0</div><div class="l">daemons, databases, dependencies</div></div>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>case</th><th>median</th><th>over startup</th><th>what it's doing</th></tr></thead>
+          <tbody>
+            <tr><td class="dim">process startup</td><td class="num">0.288 ms</td><td class="num">—</td><td class="dim">any process at all</td></tr>
+            <tr><td>sd &lt;alias&gt;</td><td class="num">0.356 ms</td><td class="num">+0.068 ms</td><td class="dim">the common case: hit a name</td></tr>
+            <tr><td>sd ls</td><td class="num">0.382 ms</td><td class="num">+0.094 ms</td><td class="dim">6 aliases in the config</td></tr>
+            <tr><td>sdcfg doctor</td><td class="num">0.587 ms</td><td class="num">+0.299 ms</td><td class="dim">every check it can do</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="parity-note">Measured on an Arch laptop, 6 aliases, median of 200 runs. Yours will differ — that's what the tool is for. The floor is measured before and after the cases so cold page cache can't flatter the numbers.</p>
+      <div class="callout"><strong>Why there is no daemon.</strong> Parsing the log cost about 120µs; a unix socket round trip costs about the same, and <code>sd &lt;alias&gt;</code> never searches the log at all. The real cost was pre-<code>main</code> work — dynamic loading and static init — both removed by static linking.</div>
+    </div>
+  </section>
+</main>
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div>
+        <h3>Who makes it</h3>
+        <p>simpledir is built by NoxTheDev and contributors in public. Every change is on GitHub.</p>
+        <a href="contributors.html">Contributors →</a>
+      </div>
+      <div>
+        <h3>Licences</h3>
+        <p>simpledir is MIT licensed. Use it, change it, ship it. No strings attached.</p>
+        <a href="https://github.com/noxthedevwindev-greatest/simpledir/blob/main/LICENSE" target="_blank" rel="noopener">MIT licence →</a>
+      </div>
+      <div>
+        <h3>Privacy</h3>
+        <p>This site sets no cookies, has no analytics and loads nothing from third parties except GitHub links.</p>
+        <a href="verified.html">How downloads are checked →</a>
+      </div>
+    </div>
+    <div class="foot-end">
+      <p>Made in the open, in Rust.</p>
+      <nav>
+        <a href="https://github.com/noxthedevwindev-greatest/simpledir" target="_blank" rel="noopener">github</a>
+        <a href="releases.html">releases</a>
+        <a href="https://github.com/noxthedevwindev-greatest/simpledir/blob/main/AGENTS.md" target="_blank" rel="noopener">contributing</a>
+        <a href="commands.html">command reference</a>
+      </nav>
+    </div>
+  </div>
+</footer>
+</body>
+</html>
