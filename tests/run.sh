@@ -1887,16 +1887,30 @@ contains "the stand-in release asset works" "sd " \
 
 helper="$FAKEHOME/install-here"
 # The helper pins PATH to the boring system paths so a stray tool can't win. On
-# GitHub's runners rustc may live outside them, though, and --source has to find
-# it: add only its directory, not the whole shell PATH the test started with.
-rustc_dir=$(dirname "$(command -v rustc)")
+# GitHub's runners the rustc there may be a rustup shim with no default set, so
+# this test uses a stand-in compiler: it is checking that --source bypasses the
+# arch gate, not how Rust is installed. The suite builds real Rust fixtures
+# elsewhere.
+STUBBIN="$FAKEHOME/bin"
+mkdir -p "$STUBBIN"
+cat > "$STUBBIN/rustc" <<EOF
+#!/usr/bin/env bash
+while [ \$# -gt 0 ]; do
+  case \$1 in
+    -o) out=\$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+cp "$ROOT/sd" "\$out"
+EOF
+chmod +x "$STUBBIN/rustc"
 cat > "$helper" <<EOF
 #!/usr/bin/env bash
 # install into a throwaway HOME, with the network stubbed out.
 # \$1 is the fake home, the rest are install.sh's own arguments.
 home=\$1; shift
 mkdir -p "\$home"
-env HOME="\$home" SHELL=/bin/bash PATH="/usr/bin:/bin:$rustc_dir" \\
+env HOME="\$home" SHELL=/bin/bash PATH="$STUBBIN:/usr/bin:/bin" \\
     SIMPLEDIR_BASE_URL="file://$PUBLISH_DIR" \\
     SIMPLEDIR_SOURCE_URL="file://$ROOT" \\
     bash "$ROOT/install.sh" "\$@"
