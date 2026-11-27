@@ -27,7 +27,7 @@ makedepends=('rust')
 # before its archive can be hashed, so this line is filled right after tagging
 # (v13 worked the same way).
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('REPLACE_WITH_V14_TARBALL_SHA256')
+sha256sums=('2d0fe6a53e5f4f83f38a50d6c664c433a8e4269b7ad0be1c525e6af1440cac31')
 # GitHub regenerates these tarballs on occasion, which occasionally changes the
 # hash for an unchanged tag. That is the trade for the guarantee above: a mismatch
 # stops the build loudly instead of quietly installing different bytes.
