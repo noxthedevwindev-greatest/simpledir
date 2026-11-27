@@ -31,12 +31,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // Kept in two pieces so `make audit-tags` and the test suite can read the
 // declared release without parsing Rust. Tests set SIMPLDIR_VERSION at compile
 // time to build stub binaries that claim an older or newer version.
-const VERSION_BASE: &str = "13.0.0";
+const VERSION_BASE: &str = "14.0.0";
 const VERSION: &str = match option_env!("SIMPLDIR_VERSION") {
     Some(v) => v,
     None => VERSION_BASE,
 };
-const TAGLINE: &str = "see it all, tidy it up";
+const TAGLINE: &str = "cleaner edges, safer jumps";
 const CONFIG_VERSION: i64 = 3;
 
 const HALF_LIFE: f64 = 3.0 * 24.0 * 3600.0;

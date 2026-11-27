@@ -20,7 +20,7 @@ Linux. MIT. Zero dependencies beyond `curl` — the binary is linked statically.
 ## Install
 
 ```
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v13.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v14.0.0/install.sh | bash
 ```
 
 The installer detects the platform, downloads a prebuilt `sd-linux-x86_64` or
@@ -216,6 +216,14 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ## Version history
 
+- 14.0.0 — hardening release with no data-format change. JSON strings now keep
+  UTF-8 paths intact on write and read, reject trailing junk and malformed `\u`
+  escapes; `as_stored()` no longer re-expands a literal `$HOME`, and ambiguous
+  aliases no longer fall through to frecency. Unknown flags and a bad `--top N`
+  exit 2; `update` skips prereleases, treats a listed-but-malformed checksum as
+  fatal while a missing one only warns, and keeps atomic backups and restores
+  with executable modes. The website gained a complete command reference and an
+  honest benchmark floor. Tagline: `cleaner edges, safer jumps`.
 - 13.0.0 — read-only visibility and one cleanup command. `sd recent` lists
   remembered directories by last visit (with `--top N` and `--json`), `sd stats`
   reports alias/tag/history counts including missing aliases and dead visits, and
@@ -308,7 +316,7 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ```
 make        # one rustc invocation over one file, static libc when available
-make test   # 830 assertions against the compiled binary, no network
+make test   # 833 assertions against the compiled binary, no network
 make assets # dist/ (binary, main.rs, install.sh, SHA256SUMS, mode 755)
 make release
 ```

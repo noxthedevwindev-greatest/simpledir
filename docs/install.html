@@ -71,7 +71,7 @@
       <p class="section-intro">The installer works out your platform, downloads a verified binary, or compiles the one Rust file itself with <code>rustc</code>. It wires the shell function <em>after</em> installing the binary, because <code>sdcfg init</code> generates the wrapper.</p>
       <div class="terminal install-panel">
         <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="term-title">install</span><button class="copy" id="copy" type="button" aria-label="copy install command">copy</button><span class="copy-status" id="copy-status" role="status" aria-live="polite"></span></div>
-        <div class="install-line"><span class="prompt" aria-hidden="true">$</span><code id="cmd">curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v13.0.0/install.sh | bash</code></div>
+        <div class="install-line"><span class="prompt" aria-hidden="true">$</span><code id="cmd">curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v14.0.0/install.sh | bash</code></div>
       </div>
       <p class="install-note">Prefer to look before you pipe? That's the right instinct — <code>curl -fsSL … -o install.sh</code>, then <code>less install.sh &amp;&amp; bash install.sh</code>.</p>
       <div class="grid-2">
@@ -84,11 +84,11 @@
       <p class="section-intro">GitHub strips the executable bit from raw release assets, so <code>sd-linux-x86_64</code> arrives as <code>0644</code>. Run <code>chmod +x sd</code>, or take the <code>.tar.gz</code> asset, which keeps <code>0755</code> and the <code>sdcfg</code> symlink. <code>install.sh</code> already does all of this for you.</p>
       <div class="terminal">
         <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="term-title">manual install</span></div>
-<pre><span class="p">$</span> <span class="c">curl -fsSLO https://github.com/noxthedevwindev-greatest/simpledir/releases/download/v13.0.0/simpledir-v13.0.0-linux-x86_64.tar.gz</span>
-<span class="p">$</span> <span class="c">curl -fsSLO https://github.com/noxthedevwindev-greatest/simpledir/releases/download/v13.0.0/SHA256SUMS</span>
-<span class="p">$</span> <span class="c">grep ' simpledir-v13.0.0-linux-x86_64.tar.gz$' SHA256SUMS | sha256sum -c -</span>
-<span class="p">$</span> <span class="c">tar -xzf simpledir-v13.0.0-linux-x86_64.tar.gz</span>
-<span class="p">$</span> <span class="c">cd simpledir-v13.0.0-linux-x86_64 &amp;&amp; install -m 755 sd ~/.local/bin/sd</span>
+<pre><span class="p">$</span> <span class="c">curl -fsSLO https://github.com/noxthedevwindev-greatest/simpledir/releases/download/v14.0.0/simpledir-v14.0.0-linux-x86_64.tar.gz</span>
+<span class="p">$</span> <span class="c">curl -fsSLO https://github.com/noxthedevwindev-greatest/simpledir/releases/download/v14.0.0/SHA256SUMS</span>
+<span class="p">$</span> <span class="c">grep ' simpledir-v14.0.0-linux-x86_64.tar.gz$' SHA256SUMS | sha256sum -c -</span>
+<span class="p">$</span> <span class="c">tar -xzf simpledir-v14.0.0-linux-x86_64.tar.gz</span>
+<span class="p">$</span> <span class="c">cd simpledir-v14.0.0-linux-x86_64 &amp;&amp; install -m 755 sd ~/.local/bin/sd</span>
 <span class="p">$</span> <span class="c">ln -s sd ~/.local/bin/sdcfg</span></pre>
       </div>
       <div class="callout"><strong>Uninstall.</strong> <code>sdcfg uninstall</code> removes the binaries and the wrapper. With <code>SIMPLEDIR_RC</code> set, both <code>uninstall</code> and <code>doctor</code> touch only that file — never a guessed <code>~/.bashrc</code>.</div>

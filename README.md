@@ -1,7 +1,8 @@
 > [!IMPORTANT]
-> **v13.0.0 is out.** `sd recent` and `sd stats` show what your visit log knows,
-> and `sdcfg tidy` cleans it up. shortcuts and data formats are unchanged, and
-> every download still checks out against its published `SHA256SUMS`.
+> **v14.0.0 is out.** cleaner edges: unicode-safe config, predictable path and
+> alias matching, safer downloads and updates, and a complete command reference
+> on the website. shortcuts and data formats are unchanged, and every download
+> still checks out against its published `SHA256SUMS`.
 
 <h1 align="center">simpledir</h1>
 
@@ -93,19 +94,19 @@ you have no compiler. either way you get `sd` plus an `sdcfg` symlink in
 `PATH`, so an unrelated `sd` elsewhere can't win.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v13.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v14.0.0/install.sh | bash
 ```
 
 prefer to look before you pipe? that's the right instinct:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v13.0.0/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v14.0.0/install.sh -o install.sh
 less install.sh && bash install.sh
 ```
 
 downloading the binary by hand? github serves release assets as `0644`, so give
 it the execute bit yourself (`chmod +x sd`), or take the
-`simpledir-v13.0.0-linux-<arch>.tar.gz` asset instead — it carries `sd` and the
+`simpledir-v14.0.0-linux-<arch>.tar.gz` asset instead — it carries `sd` and the
 `sdcfg` symlink with their modes intact. `install.sh` already does this for you.
 
 `bash install.sh --uninstall` removes both binaries and the rc block (your
@@ -324,6 +325,24 @@ want there anyway.
 tested on bash 5.2. the wrapper only uses portable constructs, so zsh should be
 fine, but that's untested — tell me if it breaks.
 
+## what's new in 14.0
+
+**cleaner edges, safer jumps.** no new data format and no new dependency; this
+release takes surprises out of the corners:
+
+- non-ASCII aliases and paths round-trip through `config.json` unchanged;
+  trailing junk and malformed `\u` escapes are rejected instead of half-accepted
+- a literal `$HOME` in a stored path stays literal on read, and an ambiguous
+  prefix says so instead of falling through to an unrelated frecency hit
+- unknown flags and a bad `--top N` exit 2; update ignores prereleases and a
+  listed-but-malformed checksum is fatal while a missing one still only warns
+- update backups and `revert` are atomic and leave the binary executable;
+  `make install` handles a missing rc file and writes it atomically
+- `sdcfg bench` measures `sd --version` before and after the cases, so the
+  "over startup" column is the same binary doing no work
+- the website has a complete command reference and a corrected config example;
+  release checks now cover both architectures and the published bytes
+
 ## what's new in 13.0
 
 **see it all, tidy it up.** the visit log was already doing the work behind
@@ -391,7 +410,7 @@ it before anything is run or replaced:
 
 ```
 ==> checksum verified against the published SHA256SUMS
-==> got sd 13.0.0 - see it all, tidy it up
+==> got sd 14.0.0 - cleaner edges, safer jumps
 ```
 
 and the failure is loud and fatal, because that is the one case where continuing
@@ -615,7 +634,7 @@ copying.
 so the installer is pinned to its own tag now:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v13.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v14.0.0/install.sh | bash
 ```
 
 a tagged path never changes, so the cache is always correct for the version it
@@ -943,7 +962,7 @@ forward. `update --to` says so before it does it, and the way back is the
 installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v13.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v14.0.0/install.sh | bash
 ```
 
 it also checks on its own, at most **once a day**, and only when you're sitting
@@ -978,7 +997,7 @@ else with `SIMPLEDIR_BIN=/path/to/sd`.
 
 ```bash
 make                # build: one rustc invocation over one file, static libc when available
-make test           # 830 assertions, real bash subprocesses, no network
+make test           # 833 assertions, real bash subprocesses, no network
 make assets         # dist/: the binary, main.rs, install.sh, SHA256SUMS
 make release        # tag, push, publish with assets attached
 vhs docs/demo.tape  # record a demo (needs vhs + ttyd)

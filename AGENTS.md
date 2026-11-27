@@ -161,7 +161,7 @@ you. keep it that way — the split is the whole ergonomic argument, and it mean
 ## before you touch anything
 
 ```bash
-make test     # 830 assertions, spawns real bash to verify the wrapper
+make test     # 833 assertions, spawns real bash to verify the wrapper
 make check    # test + audit-tags + tagline check
 ```
 

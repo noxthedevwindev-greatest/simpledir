@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Releases — simpledir</title>
-<meta name="description" content="v13.0.0 release notes, assets and checksum policy.">
+<meta name="description" content="v14.0.0 release notes, assets and checksum policy.">
 <meta name="theme-color" content="#100a1f">
 <meta name="color-scheme" content="dark">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%23100a1f'/><text x='50' y='72' font-size='58' font-family='monospace' font-weight='700' fill='%23a98fff' text-anchor='middle'>sd</text></svg>">
@@ -60,29 +60,29 @@
   <section class="page-intro">
     <div class="wrap">
       <span class="crumb"><a href="index.html">simpledir</a> / releases</span>
-      <h1>v13.0.0 — <span class="accent">see it all, tidy it up.</span></h1>
+      <h1>v14.0.0 — <span class="accent">cleaner edges, safer jumps.</span></h1>
       <p class="lede">One feature set per release. Stable releases ship freely; prereleases are for changing shapes.</p>
     </div>
   </section>
   <section class="page">
     <div class="wrap">
       <p class="section-label">Releases</p>
-      <h2 class="section-title">v13.0.0 — see it all, tidy it up.</h2>
+      <h2 class="section-title">v14.0.0 — cleaner edges, safer jumps.</h2>
       <p class="section-intro">One feature set per release, so the notes are a list of what a user can now do. Stable releases ship freely; prereleases are for features whose shape is still changing.</p>
       <div class="band-inner">
         <p class="label">Current stable</p>
-        <h2>Everything in one place,<br><span class="accent">nothing left behind.</span></h2>
-        <p><code>sd recent</code> and <code>sd stats</code> show what your visit log knows. <code>sdcfg tidy</code> cleans it up. Aliases and data formats are unchanged, and every download still checks out against its published <code>SHA256SUMS</code>.</p>
-        <div class="band-actions"><a class="btn btn-cyan" href="https://github.com/noxthedevwindev-greatest/simpledir/releases/tag/v13.0.0" target="_blank" rel="noopener">Open the release</a><a class="btn btn-ghost" href="install.html">Install it</a></div>
+        <h2>Fewer surprises,<br><span class="accent">same tiny tool.</span></h2>
+        <p>v14 is a hardening release. Non-ASCII paths survive a config round trip, a literal <code>$HOME</code> in a stored path stays literal, ambiguous shortcuts never fall through to frecency, and downloads and updates check what they publish before touching anything. Aliases and data formats are unchanged.</p>
+        <div class="band-actions"><a class="btn btn-cyan" href="https://github.com/noxthedevwindev-greatest/simpledir/releases/tag/v14.0.0" target="_blank" rel="noopener">Open the release</a><a class="btn btn-ghost" href="install.html">Install it</a></div>
       </div>
-      <h3 style="margin-top:48px">What's in v13</h3>
+      <h3 style="margin-top:48px">What's in v14</h3>
       <div class="grid-2">
-        <div class="card"><h3><code>sd recent</code></h3><p>Newest visits first, with <code>--top N</code> and <code>--json</code>.</p></div>
-        <div class="card"><h3><code>sd stats</code></h3><p>Alias, tag and history counts, including missing aliases and dead visits.</p></div>
-        <div class="card"><h3><code>sdcfg tidy</code></h3><p><code>--dry-run</code> previews one atomic cleanup; <code>--yes</code> applies it.</p></div>
-        <div class="card"><h3>Tag-aware renames</h3><p><code>rename --tags</code>, <code>rm --prune-tags</code> and <code>tag @old --rename @new</code>.</p></div>
-        <div class="card"><h3>Generated verb lists</h3><p>Wrapper forwarding and both completion scripts come from the dispatch sets.</p></div>
-        <div class="card"><h3>Executable tarball</h3><p><code>simpledir-v13.0.0-linux-x86_64.tar.gz</code> keeps <code>0755</code> and the <code>sdcfg</code> symlink.</p></div>
+        <div class="card"><h3>Unicode-safe config</h3><p>Aliases and paths with non-ASCII characters round-trip without mojibake; trailing junk and malformed <code>\u</code> escapes are rejected.</p></div>
+        <div class="card"><h3>Predictable matching</h3><p>A literal <code>$HOME</code> in a stored path stays literal, and an ambiguous prefix says so instead of jumping to a frecency hit.</p></div>
+        <div class="card"><h3>Honest flags</h3><p>Unknown flags and a bad <code>--top N</code> exit 2. Update skips prereleases and treats a malformed published checksum as fatal.</p></div>
+        <div class="card"><h3>Safer swaps</h3><p>Update backups and revert are atomic and leave the binary executable; a missing checksum still only warns.</p></div>
+        <div class="card"><h3>Complete docs</h3><p>Every <code>sd</code> and <code>sdcfg</code> verb is documented on the site, including the flags that save you a typo.</p></div>
+        <div class="card"><h3>Measured floor</h3><p><code>sdcfg bench</code> measures <code>sd --version</code> before and after the cases, so the "over startup" column stays honest.</p></div>
       </div>
       <h3 style="margin-top:48px">Assets</h3>
       <div class="table-scroll">
@@ -90,14 +90,14 @@
           <thead><tr><th>asset</th><th>what it is</th><th>note</th></tr></thead>
           <tbody>
             <tr><td class="num">sd-linux-x86_64</td><td class="dim">raw binary</td><td><code>chmod +x sd</code> after a manual download</td></tr>
-            <tr><td class="num">simpledir-v13.0.0-linux-x86_64.tar.gz</td><td class="dim">binary + sdcfg symlink</td><td>modes intact: <code>0755</code></td></tr>
+            <tr><td class="num">simpledir-v14.0.0-linux-x86_64.tar.gz</td><td class="dim">binary + sdcfg symlink</td><td>modes intact: <code>0755</code></td></tr>
             <tr><td class="num">main.rs</td><td class="dim">the entire source</td><td>build with one <code>rustc</code> command</td></tr>
             <tr><td class="num">install.sh</td><td class="dim">curl | bash installer</td><td>verifies before running</td></tr>
             <tr><td class="num">SHA256SUMS</td><td class="dim">checksums for all four</td><td>a missing sum warns, a wrong one is fatal</td></tr>
           </tbody>
         </table>
       </div>
-      <p class="parity-note">830 assertions pass. Every published tag matches the version string in the commit it points at. <a href="verified.html">How verification works →</a></p>
+      <p class="parity-note">833 assertions pass. Every published tag matches the version string in the commit it points at. <a href="verified.html">How verification works →</a></p>
     </div>
   </section>
 </main>

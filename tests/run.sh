@@ -2212,6 +2212,12 @@ rm -rf "$MK"
 # The command page is the discoverable index of both halves. Drive its coverage
 # from the same --help text that drives the dispatch assertions above, so a new
 # verb cannot ship in the binary and go missing from the website.
+home_page=$(cat "$ROOT/docs/index.html")
+install_page=$(cat "$ROOT/docs/install.html")
+release_page=$(cat "$ROOT/docs/releases.html")
+has "homepage shows the current version" "v$sd_version" "$home_page"
+has "install command pins the current version" "v$sd_version/install.sh" "$install_page"
+has "release page names the current version" "v$sd_version" "$release_page"
 docref=$(cat "$ROOT/docs/commands.html")
 for verb in $move_verbs $cfg_verbs; do
   has "command docs mention $verb" "$verb" "$docref"
@@ -2235,12 +2241,11 @@ has "desktop nav waits until it fits" "min-width: 1200px" "$site_css"
 has "the mobile menu scrolls on short screens" "max-height: calc(100svh - 80px)" "$site_css"
 has "the floor bar shows total time" "width: 81%" "$site_css"
 site_js=$(cat "$ROOT/docs/site.js")
-install_page=$(cat "$ROOT/docs/install.html")
 has "copy has a live region" 'id="copy-status"' "$install_page"
 has "copy announces success" "install command copied" "$site_js"
 has "copy announces failure" "copy failed; select the command" "$site_js"
-has "manual install fetches the published sums" "releases/download/v13.0.0/SHA256SUMS" \
-  "$install_page"
+has "manual install fetches the published sums" \
+  "releases/download/v$sd_version/SHA256SUMS" "$install_page"
 zoxide_page=$(cat "$ROOT/docs/zoxide.html")
 has "comparison rows are labelled" '<th scope="row"' "$zoxide_page"
 contributors_page=$(cat "$ROOT/docs/contributors.html")

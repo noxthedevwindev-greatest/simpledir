@@ -1,7 +1,7 @@
 # Maintainer: NoxTheDev <https://github.com/noxthedevwindev-greatest>
 # Contributor: Your Name <you@example.com>
 pkgname=simpledir
-pkgver=13.0.0
+pkgver=14.0.0
 pkgrel=1
 pkgdesc="Named directory shortcuts for your shell - a frecency-aware zoxide alternative"
 arch=('x86_64' 'aarch64')
@@ -22,10 +22,12 @@ makedepends=('rust')
 #
 # Bumping a release means regenerating one line:
 #   updpkgsums
-# Pinned to the published v13.0.0 archive. The checksum is of the tag's own
-# source tarball, not of a release asset generated later.
+# Pinned to the published v14.0.0 archive. The checksum is of the tag's own
+# source tarball, not of a release asset generated later. The tag has to exist
+# before its archive can be hashed, so this line is filled right after tagging
+# (v13 worked the same way).
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('ef6c3bb603d693aadce7fe23a2a90fb767b5fb6d62a63d17dedb38f26bdc1acd')
+sha256sums=('REPLACE_WITH_V14_TARBALL_SHA256')
 # GitHub regenerates these tarballs on occasion, which occasionally changes the
 # hash for an unchanged tag. That is the trade for the guarantee above: a mismatch
 # stops the build loudly instead of quietly installing different bytes.
