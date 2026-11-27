@@ -8,17 +8,17 @@
 
 staticStdenv.mkDerivation (finalAttrs: {
   pname = "simpledir";
-  version = "12.0.0";
+  version = "13.0.0";
 
   src = fetchFromGitHub {
     owner = "noxthedevwindev-greatest";
     repo = "simpledir";
     rev = "v${finalAttrs.version}";
-    # TODO(v12): the v12.0.0 tag is not published yet. lib.fakeHash makes the
+    # TODO(v13): the v13.0.0 tag is not published yet. lib.fakeHash makes the
     # build fail loudly rather than silently reusing a previous release's hash; replace it
     # with the nixpkgs-review output, or:
     #   nix-prefetch-url --unpack \
-    #     https://github.com/noxthedevwindev-greatest/simpledir/archive/v12.0.0.tar.gz
+    #     https://github.com/noxthedevwindev-greatest/simpledir/archive/v13.0.0.tar.gz
     hash = lib.fakeHash;
   };
 

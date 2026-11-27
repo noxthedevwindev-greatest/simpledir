@@ -11,8 +11,7 @@
 <meta property="og:type" content="website">
 <meta property="og:title" content="simpledir — the next zoxide">
 <meta property="og:description" content="sd moves you. sdcfg configures things. that's the whole tool. two commands, one Rust file, curl and nothing else.">
-<meta property="og:image" content="demo.gif">
-<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:card" content="summary">
 
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%231e1e2e'/><text x='50' y='72' font-size='58' font-family='monospace' font-weight='700' fill='%2389b4fa' text-anchor='middle'>sd</text></svg>">
 
@@ -461,7 +460,7 @@
 <div class="notice">
   <div class="wrap">
     <span class="glyph" aria-hidden="true">🎉</span>
-    <div><strong>v12.0.0 is out.</strong> simpledir has been rewritten in Rust with the same shortcuts. the pause issue is closed; <code>curl | bash</code> and <code>sdcfg update</code> keep working, and every download still checks out against its published <code>SHA256SUMS</code>.</div>
+    <div><strong>v13.0.0 is out.</strong> <code>sd recent</code> and <code>sd stats</code> show what your visit log knows, and <code>sdcfg tidy</code> cleans it up. shortcuts and data formats are unchanged, and every download still checks out against its published <code>SHA256SUMS</code>.</div>
   </div>
 </div>
 
@@ -472,12 +471,12 @@
     <p class="lede"><b>sd</b> moves you. <b>sdcfg</b> configures things. that's the whole tool — two commands, one Rust file, rewritten in Rust with the same shortcuts. curl is the only thing it ever runs.</p>
 
     <div class="badges">
-      <span class="badge"><b>v12.0.0</b></span>
+      <span class="badge"><b>v13.0.0</b></span>
       <span class="badge">MIT</span>
       <span class="badge">linux only</span>
       <span class="badge">statically linked</span>
       <span class="badge">curl is the <b>only</b> dependency</span>
-      <span class="badge">646 tests</span>
+      <span class="badge">707 tests</span>
     </div>
 
     <div class="install">
@@ -488,7 +487,7 @@
         </div>
         <div class="cmd">
           <span class="prompt" aria-hidden="true">$</span>
-          <span class="snippet" id="cmd">curl -fsSL https://<wbr>raw.githubusercontent.com/<wbr>noxthedevwindev-greatest/<wbr>simpledir/<wbr>v12.0.0/<wbr>install.sh | bash</span>
+          <span class="snippet" id="cmd">curl -fsSL https://<wbr>raw.githubusercontent.com/<wbr>noxthedevwindev-greatest/<wbr>simpledir/<wbr>v13.0.0/<wbr>install.sh | bash</span>
           <button class="copy" id="copy" type="button" aria-label="copy install command">copy</button>
         </div>
       </div>
@@ -498,13 +497,6 @@
 </header>
 
 <main>
-
-  <div class="wrap demo">
-    <div class="demo-frame">
-      <img src="demo.gif" alt="simpledir demo: bind a name, jump to it, group with tags, hash a file, and find a directory you never named">
-    </div>
-    <p class="demo-cap">bind a name · jump · group with tags · measure it · hash a file · find what you never named</p>
-  </div>
 
   <!-- the split -->
   <section id="commands">
@@ -523,6 +515,8 @@
             <li>sd - <span>previous dir</span></li>
             <li>sd ls <span>what can i jump to</span></li>
             <li>sd top <span>where you actually go</span></li>
+            <li>sd recent <span>where you just were</span></li>
+            <li>sd stats <span>the whole picture</span></li>
             <li>sd suggest <span>mine your history</span></li>
             <li>sd sha256 file <span>hash it yourself</span></li>
           </ul>
@@ -536,6 +530,7 @@
             <li>sdcfg import dir <span>a whole tree</span></li>
             <li>sdcfg bind <span>name what history shows</span></li>
             <li>sdcfg tag @desk <span>group aliases</span></li>
+            <li>sdcfg tidy <span>clean up dead paths</span></li>
             <li>sdcfg zoxide <span>import from zoxide</span></li>
             <li>sdcfg doctor <span>check the install</span></li>
             <li>sdcfg update <span>upgrade, verified</span></li>
@@ -655,6 +650,44 @@
     </div>
   </section>
 
+  <!-- seeing and cleaning -->
+  <section id="insight">
+    <div class="wrap">
+      <h2><span class="hash">#</span>seeing what it knows</h2>
+      <p class="sub"><code>sd top</code> ranks by frecency. <code>sd recent</code> answers the other question — where you were most recently — and <code>sd stats</code> reports the shape of the whole setup in one screen.</p>
+
+      <div class="verify">
+      <div class="term">
+        <div class="term-bar">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <span class="term-title">recent / stats</span>
+        </div>
+<pre>$ <b>sd recent --top 3</b>
+3 directories, newest visit first:
+
+  just now  ./src/neovim-config   [named]
+  12m ago  ./Projects/simpledir
+   3d ago  ./old-scratch          [gone]
+
+$ <b>sd stats</b>
+simpledir at a glance:
+
+  aliases: 24 (2 missing)
+  tags: 3 (1 stale member)
+  history: 112 (104 alive, 8 dead)
+  recording: on
+  clean up: sdcfg tidy --dry-run</pre>
+      </div>
+
+      <ul>
+        <li><span class="tick">▸</span><span>both are <b>read-only</b> and both take <code>--json</code>, so scripts get numbers instead of words.</span></li>
+        <li><span class="tick">▸</span><span><code>sdcfg tidy --dry-run</code> shows the plan; <code>--yes</code> unbinds dead aliases, drops stale tag members and forgets dead visits.</span></li>
+        <li><span class="tick">▸</span><span><code>sdcfg rename --tags</code>, <code>sdcfg rm --prune-tags</code> and <code>sdcfg tag @old --rename @new</code> keep names and groups in step.</span></li>
+      </ul>
+      </div>
+    </div>
+  </section>
+
   <!-- what it's made of -->
   <section id="made-of">
     <div class="wrap">
@@ -689,7 +722,7 @@
         </div>
         <div class="feat">
           <span class="ic">✓</span>
-          <h3>646 assertions</h3>
+          <h3>707 assertions</h3>
           <p>the suite drives the compiled binary through <b>the same command line you do</b>, in real bash subprocesses, with no network. it must be green before anything ships.</p>
         </div>
       </div>
@@ -709,7 +742,7 @@
             <span class="term-title">verified / refused</span>
           </div>
 <pre><span class="ok">==> checksum verified against the published SHA256SUMS</span>
-<span class="ok">==> got sd 12.0.0 - rewritten in Rust, same shortcuts…</span>
+<span class="ok">==> got sd 13.0.0 - see it all, tidy it up…</span>
 
 <span class="err">!! CHECKSUM MISMATCH for sd-linux-x86_64</span>
 <span class="err">!!   published: 3dac5b53a658…</span>
@@ -740,7 +773,7 @@
       <p class="sub">no funnel, no email, no signup. it's a file on the internet and a repository.</p>
 
       <div class="links">
-        <a class="link" href="https://github.com/noxthedevwindev-greatest/simpledir/releases/tag/v12.0.0">
+        <a class="link" href="https://github.com/noxthedevwindev-greatest/simpledir/releases/tag/v13.0.0">
           <span class="t">releases →</span>
           <span class="d">binaries, <code>main.rs</code>, <code>install.sh</code> and <code>SHA256SUMS</code>, every one of them verified.</span>
         </a>
@@ -769,7 +802,7 @@
       <a href="https://github.com/noxthedevwindev-greatest/simpledir">github</a>
       <a href="https://github.com/noxthedevwindev-greatest/simpledir/releases">releases</a>
       <a href="https://github.com/noxthedevwindev-greatest/simpledir/blob/main/LICENSE">mit license</a>
-      <a href="https://github.com/noxthedevwindev-greatest/simpledir/releases/tag/v12.0.0">v12.0.0 release</a>
+      <a href="https://github.com/noxthedevwindev-greatest/simpledir/releases/tag/v13.0.0">v13.0.0 release</a>
     </nav>
   </div>
 </footer>

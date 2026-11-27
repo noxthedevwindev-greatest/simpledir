@@ -2,7 +2,7 @@
 # a tag whose commit disagrees with its own version string.
 #
 # The point is not that CI is greener than my laptop. The point is that the two
-# claims this repo makes -- "645 assertions pass" and "every published tag names
+# claims this repo makes -- "707 assertions pass" and "every published tag names
 # the version inside it" -- are checked by something that isn't a person
 # remembering to check them. v1.0.0 shipped four releases with a tag pointing one
 # commit late, and every test stubbed the thing that would have noticed.

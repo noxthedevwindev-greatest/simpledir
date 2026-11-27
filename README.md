@@ -1,12 +1,7 @@
 > [!IMPORTANT]
-> **v12.0.0 is out.** simpledir has been rewritten in Rust with the same
-> shortcuts. the pause issue is closed; `curl | bash` and `sdcfg update` keep
-> working, and every download still checks out against its published
-> `SHA256SUMS`.
-
-<p align="center">
-  <img src="docs/demo.gif" width="820" alt="sd demo: bind a name, jump to it, group with tags, hash a file, and find a directory you never named">
-</p>
+> **v13.0.0 is out.** `sd recent` and `sd stats` show what your visit log knows,
+> and `sdcfg tidy` cleans it up. shortcuts and data formats are unchanged, and
+> every download still checks out against its published `SHA256SUMS`.
 
 <h1 align="center">simpledir</h1>
 
@@ -37,8 +32,8 @@ it is two commands, split by what they do to you:
 
 | | | |
 | --- | --- | --- |
-| **`sd`** | moves you, reads your config | `sd dots`, `sd dots/nix`, `sd -`, `sd ls`, `sd top`, `sd i`, `sd suggest` |
-| **`sdcfg`** | changes things, never moves you | `add`, `rm`, `rename`, `import`, `bind`, `forget`, `migrate`, `zoxide`, `update`, `revert`, `doctor` |
+| **`sd`** | moves you, reads your config | `sd dots`, `sd dots/nix`, `sd -`, `sd ls`, `sd top`, `sd recent`, `sd stats`, `sd i`, `sd suggest` |
+| **`sdcfg`** | changes things, never moves you | `add`, `rm`, `rename`, `import`, `bind`, `forget`, `tidy`, `tag`, `migrate`, `zoxide`, `update`, `revert`, `doctor` |
 
 `sd` cannot rewrite your aliases and `sdcfg` cannot change your directory. one
 is safe in a pipeline, the other is safe to hit by reflex.
@@ -98,13 +93,13 @@ you have no compiler. either way you get `sd` plus an `sdcfg` symlink in
 `PATH`, so an unrelated `sd` elsewhere can't win.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v12.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v13.0.0/install.sh | bash
 ```
 
 prefer to look before you pipe? that's the right instinct:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v12.0.0/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v13.0.0/install.sh -o install.sh
 less install.sh && bash install.sh
 ```
 
@@ -166,6 +161,48 @@ directories into named aliases, so you don't have to start from nothing.
 
 they don't conflict, so you can run both for a while and compare. but if this
 does everything zoxide did for you, one fewer thing is a win.
+
+## seeing what it knows
+
+`sd top` ranks directories by frecency. `sd recent` answers the other question —
+where you were most recently — and `sd stats` reports the shape of the whole
+setup in one screen:
+
+```bash
+$ sd recent
+3 directories, newest visit first:
+
+  just now  ./src/neovim-config   [named]
+  12m ago  ./Projects/simpledir
+   3d ago  ./old-scratch          [gone]
+
+  ranked by visits: sd top
+
+$ sd stats
+simpledir at a glance:
+
+  aliases: 24 (2 missing)
+  tags: 3 (1 stale member)
+  history: 112 (104 alive, 8 dead)
+  recording: on
+  most visited: /home/you/Projects/simpledir (18.42)
+```
+
+both take `--json`, so a script can read the numbers instead of the words.
+`sd recent --top N` caps the list; `sd stats` reports `SIMPLEDIR_NO_HISTORY` as
+`recording: false`.
+
+when paths move and tags go stale, `sdcfg tidy` is the write half:
+
+```bash
+sdcfg tidy --dry-run   # show the plan, change nothing
+sdcfg tidy --yes       # unbind dead aliases, drop stale tag members, forget dead visits
+```
+
+it leaves live aliases alone and keeps the same two json files. for one-off
+cleanups, `sdcfg rename --tags old new` carries a renamed alias into every tag
+that held it, `sdcfg rm --prune-tags old` drops an unbound one, and
+`sdcfg tag @old --rename @new` renames a group without rebuilding it.
 
 ## getting started when you have nothing
 
@@ -282,6 +319,27 @@ want there anyway.
 tested on bash 5.2. the wrapper only uses portable constructs, so zsh should be
 fine, but that's untested — tell me if it breaks.
 
+## what's new in 13.0
+
+**see it all, tidy it up.** the visit log was already doing the work behind
+`sd top` and `sd suggest`; now you can look at it directly and act on what it
+says, without a daemon, a database or anything that guesses:
+
+- `sd recent [<query>] [--top N] [--json]` — the same log, newest visit first,
+  with a human age and `[named]` / `[gone]` markers
+- `sd stats [--json]` — alias, tag and history counts, plus the top, newest and
+  oldest visits; `SIMPLEDIR_NO_HISTORY` shows up as `recording: false`
+- `sdcfg tidy [--dry-run] [--yes]` — one atomic cleanup for dead aliases, stale
+  tag members and faded or missing history entries
+- `sdcfg rename --tags old new`, `sdcfg rm --prune-tags old` and
+  `sdcfg tag @old --rename @new` — tag membership stays in step with renames
+- the shell wrapper's forwarded verbs and both completion scripts are generated
+  from the dispatch sets instead of copied as literals, so the next verb can't
+  quietly disappear
+
+all of it is arithmetic over the json files already on your machine. no model,
+no inference, no new dependency, and the config and history formats are unchanged.
+
 ## what's new in 12.0
 
 **the whole program is now in Rust.** same shortcuts, same data formats, same
@@ -325,7 +383,7 @@ it before anything is run or replaced:
 
 ```
 ==> checksum verified against the published SHA256SUMS
-==> got sd 12.0.0 - rewritten in Rust, same shortcuts
+==> got sd 13.0.0 - see it all, tidy it up
 ```
 
 and the failure is loud and fatal, because that is the one case where continuing
@@ -547,7 +605,7 @@ copying.
 so the installer is pinned to its own tag now:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v12.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v13.0.0/install.sh | bash
 ```
 
 a tagged path never changes, so the cache is always correct for the version it
@@ -875,7 +933,7 @@ forward. `update --to` says so before it does it, and the way back is the
 installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v12.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v13.0.0/install.sh | bash
 ```
 
 it also checks on its own, at most **once a day**, and only when you're sitting
@@ -910,10 +968,10 @@ else with `SIMPLEDIR_BIN=/path/to/sd`.
 
 ```bash
 make                # build: one rustc invocation over one file, static libc when available
-make test           # 646 assertions, real bash subprocesses, no network
+make test           # 707 assertions, real bash subprocesses, no network
 make assets         # dist/: the binary, main.rs, install.sh, SHA256SUMS
 make release        # tag, push, publish with assets attached
-vhs docs/demo.tape  # re-record the gif above (needs vhs + ttyd)
+vhs docs/demo.tape  # record a demo (needs vhs + ttyd)
 ```
 
 one source file, `src/main.rs`, and one output, `sd`, with `sdcfg` symlinked to

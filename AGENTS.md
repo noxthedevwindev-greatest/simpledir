@@ -133,11 +133,13 @@ you. keep it that way — the split is the whole ergonomic argument, and it mean
     all been wrong: the shell wrapper's literal forwarded set (v8.0.1 didn't
     forward `adapt`), the fast path's set inside `run_move` (`sd sha256` tried to
     jump to an alias named "sha256"), and the `known`/`config_verbs` sets in
-    `run_config`. sd.cpp now has `move_verbs()` as the single source for the move
-    half. the suite derives both halves' lists out of `--help` and asserts that no
-    verb exits 0 having said nothing, and that no bare `sd <verb>` is treated as
-    an alias. if you add a verb, add it to `--help` too or those assertions stop
-    covering it — that is the whole mechanism.
+    `run_config`. `src/main.rs` now has `move_verbs()` and `config_verbs()` as the
+    single sources: the wrapper's forwarded set and both completion scripts are
+    generated from them instead of copied as literals. the suite derives both
+    halves' lists out of `--help` and asserts that no verb exits 0 having said
+    nothing, that no bare `sd <verb>` is treated as an alias, and that completions
+    offer every config verb. if you add a verb, add it to `--help` too or those
+    assertions stop covering it — that is the whole mechanism.
 22. **a benchmark that flatters you is worse than none.** `cmd_bench()` forks the
     real binary and forks it again for the floor, and the floor is measured
     *twice* -- before and after the cases -- keeping the faster. Measuring it only
@@ -159,7 +161,7 @@ you. keep it that way — the split is the whole ergonomic argument, and it mean
 ## before you touch anything
 
 ```bash
-make test     # 645 assertions, spawns real bash to verify the wrapper
+make test     # 707 assertions, spawns real bash to verify the wrapper
 make check    # test + audit-tags + tagline check
 ```
 
@@ -181,7 +183,7 @@ when stdin isn't a terminal.
 | `sd` | build output. gitignored. `make` |
 | `install.sh` | the `curl \| bash` installer. detects the platform, downloads a binary or compiles one, wires the rc |
 | `tests/run.sh` | the test suite. plain bash, no framework, temp config dir |
-| `docs/demo.tape` | [vhs](https://github.com/charmbracelet/vhs) script for `docs/demo.gif` |
+| `docs/demo.tape` | [vhs](https://github.com/charmbracelet/vhs) script for a local demo; the gif is not shipped |
 | `packaging/PKGBUILD` | Arch package. bump `pkgver` on release |
 | `packaging/nix/` | a nixpkgs expression |
 | `Makefile` | `binaries` / `install` / `uninstall` / `test` / `assets` / `release` |
@@ -256,9 +258,9 @@ the commit it points at. tag the commit that *declares* the version, and check.
 or by hand:
 
 ```bash
-git tag -a v12.0.0 -m "v12.0.0"
-git push origin v12.0.0
-gh release create v12.0.0 --title "v12.0.0 — rewritten in Rust, same shortcuts" --notes "..." dist/sd-linux-x86_64 dist/main.rs dist/install.sh
+git tag -a v13.0.0 -m "v13.0.0"
+git push origin v13.0.0
+gh release create v13.0.0 --title "v13.0.0 — see it all, tidy it up" --notes "..." dist/sd-linux-x86_64 dist/main.rs dist/install.sh
 ```
 
 - **stable release** (`v6.1.0`) — a feature that works and is tested. ship these

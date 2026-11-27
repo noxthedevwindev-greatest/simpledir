@@ -47,11 +47,11 @@ the one thing that always blocks a first submission is the `hash` in
 
 ```bash
 nix-prefetch-url --unpack \
-  https://github.com/noxthedevwindev-greatest/simpledir/archive/v12.0.0.tar.gz
+  https://github.com/noxthedevwindev-greatest/simpledir/archive/v13.0.0.tar.gz
 ```
 
 or just read it out of the `nixpkgs-review` run and paste it in. until the
-v12.0.0 tag exists, `package.nix` deliberately uses `lib.fakeHash`: a placeholder
+v13.0.0 tag exists, `package.nix` deliberately uses `lib.fakeHash`: a placeholder
 hash fails the build, it doesn't warn.
 
 `doCheck` is on and runs `tests/run.sh`, which compiles its own stub binaries

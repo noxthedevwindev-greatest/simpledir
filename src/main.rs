@@ -31,12 +31,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // Kept in two pieces so `make audit-tags` and the test suite can read the
 // declared release without parsing Rust. Tests set SIMPLDIR_VERSION at compile
 // time to build stub binaries that claim an older or newer version.
-const VERSION_BASE: &str = "12.0.0";
+const VERSION_BASE: &str = "13.0.0";
 const VERSION: &str = match option_env!("SIMPLDIR_VERSION") {
     Some(v) => v,
     None => VERSION_BASE,
 };
-const TAGLINE: &str = "rewritten in Rust, same shortcuts";
+const TAGLINE: &str = "see it all, tidy it up";
 const CONFIG_VERSION: i64 = 3;
 
 const HALF_LIFE: f64 = 3.0 * 24.0 * 3600.0;
@@ -180,16 +180,18 @@ fn set_prog(s: &'static str) {
 }
 
 fn move_verbs() -> BTreeSet<&'static str> {
-    ["ls", "i", "print", "top", "suggest", "adapt", "sha256"]
-        .into_iter()
-        .collect()
+    [
+        "ls", "i", "print", "top", "recent", "stats", "suggest", "adapt", "sha256",
+    ]
+    .into_iter()
+    .collect()
 }
 
 fn config_verbs() -> BTreeSet<&'static str> {
     [
-        "add", "rm", "rename", "import", "bind", "tag", "project", "adapt", "forget", "migrate",
-        "bench", "zoxide", "prompt", "export", "adopt", "edit", "init", "completions", "update",
-        "revert", "releases", "uninstall", "doctor",
+        "add", "rm", "rename", "import", "bind", "tag", "project", "adapt", "forget", "tidy",
+        "migrate", "bench", "zoxide", "prompt", "export", "adopt", "edit", "init", "completions",
+        "update", "revert", "releases", "uninstall", "doctor",
     ]
     .into_iter()
     .collect()
@@ -206,7 +208,10 @@ usage: sd <alias>              jump to a directory you bound
   sd ls --names                one alias per line, for scripts
   sd ls --json                 the same shape as the config file
   sd print <alias[/sub]>       print the directory, don't cd
-  sd top [<query>]             the frecency log, best first
+  sd top [<query>] [--json]    the frecency log, best first
+  sd recent [<query>] [--top N]  most recent visits, newest first
+  sd recent --json             the same list as JSON
+  sd stats [--json]            aliases, tags and history at a glance
   sd suggest [<query>]         directories from your history worth naming
   sd suggest --json            as JSON
   sd i [<query>]               interactive picker (fzf if installed)
@@ -229,15 +234,16 @@ usage: sdcfg <command> [arguments]
 
   sdcfg add [<name>] [<path>]  bind a name; defaults to the dir's own name and $PWD
   sdcfg rm <name>              unbind
-  sdcfg rename <old> <new>     rename, keeping the path
+  sdcfg rename <old> <new>     rename, keeping the path; --tags carries tags
   sdcfg import <dir>           bind every subdirectory of a tree at once
   sdcfg bind                   name everything `sd suggest` found
-  sdcfg tag @name <alias>...  group aliases; `sd @name` lists them
-  sdcfg project add <n> [p]  an alias that follows you into a project
+  sdcfg tag [@name] <alias>... group aliases; @old --rename @new renames a tag
+  sdcfg project [add|rm]       an alias that follows you into a project
   sdcfg adapt [--accept <n>] remember what you said about a suggestion
   sdcfg export [<file>]     write a portable config; $HOME becomes ~
   sdcfg adopt <file>        merge one back in
   sdcfg forget                 drop directories from the visit log
+  sdcfg tidy [--dry-run]       prune dead aliases, tags and faded history
   sdcfg migrate                migrate the config file to the current version
   sdcfg zoxide                 import the directories zoxide knows about
   sdcfg edit [<editor>]        open the config in $EDITOR
@@ -376,6 +382,25 @@ fn shell_quote(v: &str) -> String {
 
 fn join(parts: &[String], sep: &str) -> String {
     parts.join(sep)
+}
+
+fn num_cmp(a: f64, b: f64) -> std::cmp::Ordering {
+    a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal)
+}
+
+fn relative_age(now: f64, at: f64) -> String {
+    let seconds = (now - at).max(0.0);
+    if seconds < 60.0 {
+        "just now".to_string()
+    } else if seconds < 3600.0 {
+        format!("{}m ago", (seconds / 60.0) as i64)
+    } else if seconds < 86400.0 {
+        format!("{}h ago", (seconds / 3600.0) as i64)
+    } else if seconds < 7.0 * 86400.0 {
+        format!("{}d ago", (seconds / 86400.0) as i64)
+    } else {
+        format!("{}w ago", (seconds / (7.0 * 86400.0)) as i64)
+    }
 }
 
 fn read_line() -> Option<String> {
@@ -1668,6 +1693,16 @@ fn parse_args(argv: &[String]) -> Res<Args> {
     Ok(args)
 }
 
+fn parse_limit(args: &Args, default: i32) -> Res<i32> {
+    if !args.saw("top") {
+        return Ok(default);
+    }
+    match args.value("top").parse::<i32>() {
+        Ok(n) if n > 0 => Ok(n),
+        _ => Err(usage("--top wants a positive number")),
+    }
+}
+
 // ---------------------------------------------------------------- dispatch
 
 fn run_move(argv: &[String]) -> Res<i32> {
@@ -1736,6 +1771,29 @@ fn run_move(argv: &[String]) -> Res<i32> {
             cmd_ls(&args)
         }
         "top" => cmd_top(&parse_args(rest)?),
+        "recent" => {
+            let args = parse_args(rest)?;
+            let allowed: BTreeSet<&str> = ["json", "top"].into_iter().collect();
+            for flag in args.flags.keys() {
+                if !allowed.contains(flag.as_str()) {
+                    return Err(usage(format!(
+                        "unknown flag '--{flag}' for `{MOVE} recent`. try --top, --json"
+                    )));
+                }
+            }
+            cmd_recent(&args)
+        }
+        "stats" => {
+            let args = parse_args(rest)?;
+            for flag in args.flags.keys() {
+                if flag != "json" {
+                    return Err(usage(format!(
+                        "unknown flag '--{flag}' for `{MOVE} stats`. try --json"
+                    )));
+                }
+            }
+            cmd_stats(&args)
+        }
         "adapt" => {
             let args = parse_args(rest)?;
             let allowed: BTreeSet<&str> = ["json", "top", "all"].into_iter().collect();
@@ -1799,7 +1857,10 @@ fn run_config(argv: &[String]) -> Res<i32> {
         return Ok(0);
     }
     if !known.contains(verb) {
-        let move_hints: BTreeSet<&str> = ["ls", "print", "suggest", "i", "top", "adapt"].into_iter().collect();
+        let move_hints: BTreeSet<&str> =
+            ["ls", "print", "suggest", "i", "top", "recent", "stats", "adapt", "sha256"]
+                .into_iter()
+                .collect();
         if move_hints.contains(verb) {
             err(&format!("did you mean `{MOVE} {verb}`? {CONFIG} only changes things.\n"));
         }
@@ -1818,6 +1879,7 @@ fn run_config(argv: &[String]) -> Res<i32> {
         "adopt" => cmd_adopt(&args),
         "adapt" => cmd_adapt_apply(&args),
         "forget" => cmd_forget(&args),
+        "tidy" => cmd_tidy(&args),
         "migrate" => cmd_migrate(&args),
         "zoxide" => cmd_zoxide(&args),
         "update" => cmd_update(&args),
@@ -2343,6 +2405,223 @@ fn cmd_top(args: &Args) -> Res<i32> {
     }
     if any_gone {
         out(&format!("\n  clean those up: {} forget --missing\n", CONFIG));
+    }
+    Ok(0)
+}
+
+// `top` ranks by decayed frecency. `recent` answers the other question: where
+// did I just come from? Both read the same log; neither writes to it.
+fn cmd_recent(args: &Args) -> Res<i32> {
+    let cfg = load_config()?;
+    let limit = parse_limit(args, 10)?;
+    let now = now_seconds();
+    let query = args.word(0);
+    let bound: BTreeSet<String> = cfg.aliases.values().map(|p| as_stored(p)).collect();
+
+    struct RecentRow {
+        path: String,
+        at: f64,
+        score: f64,
+        named: bool,
+        exists: bool,
+    }
+    let mut rows: Vec<RecentRow> = Vec::new();
+    for (path, entry) in read_history() {
+        if !query.is_empty() && !contains_ci(&path, &query) {
+            continue;
+        }
+        let score = decayed(&entry, now);
+        if score < FLOOR {
+            continue;
+        }
+        let named = bound.contains(&path);
+        let exists = is_dir(&path);
+        rows.push(RecentRow {
+            path,
+            at: entry.t,
+            score,
+            named,
+            exists,
+        });
+    }
+    rows.sort_by(|a, b| num_cmp(b.at, a.at).then_with(|| a.path.cmp(&b.path)));
+    if (limit as usize) < rows.len() {
+        rows.truncate(limit as usize);
+    }
+
+    if rows.is_empty() {
+        if !cfg.aliases.is_empty() && !query.is_empty() {
+            err(&format!(
+                "{MOVE}: nothing recent matches '{query}'. see the whole log: {MOVE} top\n"
+            ));
+        } else {
+            out("nothing in your visit log yet. every jump gets remembered.\n");
+            out(&format!(
+                "  turn it off with SIMPLEDIR_NO_HISTORY=1, or {CONFIG} forget\n"
+            ));
+        }
+        return Ok(0);
+    }
+
+    if args.has("json") {
+        let mut list = Json::arr();
+        if let Json::Arr(items) = &mut list {
+            for row in &rows {
+                let mut node = Json::obj();
+                node.set("path", Json::str(row.path.clone()));
+                node.set("last", Json::num(row.at));
+                node.set("age", Json::str(relative_age(now, row.at)));
+                node.set("score", mv_json_score(row.score));
+                node.set("named", Json::boolean(row.named));
+                node.set("exists", Json::boolean(row.exists));
+                items.push(node);
+            }
+        }
+        out(&(json_dump(&list, 2, 0) + "\n"));
+        return Ok(0);
+    }
+
+    let width = rows
+        .iter()
+        .map(|row| relative_age(now, row.at).len())
+        .max()
+        .unwrap_or(0);
+    out(&format!("{} directories, newest visit first:\n\n", rows.len()));
+    for row in &rows {
+        let mut badges = Vec::new();
+        if !row.exists {
+            badges.push("gone".to_string());
+        } else if row.named {
+            badges.push("named".to_string());
+        }
+        let age = relative_age(now, row.at);
+        let mut line = format!("  {:>age_width$}  {}", age, row.path, age_width = width);
+        if !badges.is_empty() {
+            line.push_str("   [");
+            line.push_str(&join(&badges, ", "));
+            line.push(']');
+        }
+        line.push('\n');
+        out(&line);
+    }
+    out(&format!("\n  ranked by visits: {MOVE} top\n"));
+    Ok(0)
+}
+
+fn cmd_stats(args: &Args) -> Res<i32> {
+    let cfg = load_config()?;
+    let now = now_seconds();
+    let dirs = read_history();
+
+    let missing: Vec<String> = cfg
+        .aliases
+        .iter()
+        .filter(|(_, path)| !is_dir(&as_stored(path)))
+        .map(|(name, _)| name.clone())
+        .collect();
+    let stale: Vec<String> = cfg
+        .tags
+        .iter()
+        .flat_map(|(_, members)| members.iter())
+        .filter(|member| !cfg.aliases.contains_key(*member))
+        .cloned()
+        .collect();
+    let dead_history: Vec<String> = dirs
+        .iter()
+        .filter(|(path, visit)| !is_dir(path) || decayed(visit, now) < FLOOR)
+        .map(|(path, _)| path.clone())
+        .collect();
+    let alive = dirs.len() - dead_history.len();
+    let top = dirs
+        .iter()
+        .max_by(|a, b| num_cmp(decayed(a.1, now), decayed(b.1, now)));
+    let newest = dirs.iter().max_by(|a, b| num_cmp(a.1.t, b.1.t));
+    let oldest = dirs.iter().min_by(|a, b| num_cmp(a.1.t, b.1.t));
+
+    if args.has("json") {
+        let mut node = Json::obj();
+        node.set("aliases", Json::num(cfg.aliases.len() as f64));
+        node.set("missing_aliases", Json::num(missing.len() as f64));
+        node.set("tags", Json::num(cfg.tags.len() as f64));
+        node.set("stale_tag_members", Json::num(stale.len() as f64));
+        node.set("history", Json::num(dirs.len() as f64));
+        node.set("alive", Json::num(alive as f64));
+        node.set("dead_history", Json::num(dead_history.len() as f64));
+        node.set("recording", Json::boolean(history_enabled(&cfg)));
+        node.set(
+            "top",
+            match top {
+                Some((path, visit)) => {
+                    let mut entry = Json::obj();
+                    entry.set("path", Json::str(path.clone()));
+                    entry.set("score", mv_json_score(decayed(visit, now)));
+                    entry
+                }
+                None => Json::Null,
+            },
+        );
+        let when = |found: Option<(&String, &Visit)>| match found {
+            Some((path, visit)) => {
+                let mut entry = Json::obj();
+                entry.set("path", Json::str(path.clone()));
+                entry.set("last", Json::num(visit.t));
+                entry.set("age", Json::str(relative_age(now, visit.t)));
+                entry
+            }
+            None => Json::Null,
+        };
+        node.set("newest", when(newest));
+        node.set("oldest", when(oldest));
+        out(&(json_dump(&node, 2, 0) + "\n"));
+        return Ok(0);
+    }
+
+    out("simpledir at a glance:\n\n");
+    out(&format!(
+        "  aliases: {} ({} missing)\n",
+        cfg.aliases.len(),
+        missing.len()
+    ));
+    out(&format!(
+        "  tags: {} ({} stale members)\n",
+        cfg.tags.len(),
+        stale.len()
+    ));
+    out(&format!(
+        "  history: {} ({} alive, {} dead)\n",
+        dirs.len(),
+        alive,
+        dead_history.len()
+    ));
+    out(&format!(
+        "  recording: {}\n",
+        if history_enabled(&cfg) { "on" } else { "off" }
+    ));
+    if let Some((path, visit)) = top {
+        out(&format!(
+            "  most visited: {} ({:.2})\n",
+            path,
+            decayed(visit, now)
+        ));
+    }
+    if let Some((path, visit)) = newest {
+        out(&format!(
+            "  newest visit: {} ({})\n",
+            path,
+            relative_age(now, visit.t)
+        ));
+    }
+    if let Some((path, visit)) = oldest {
+        out(&format!(
+            "  oldest visit: {} ({})\n",
+            path,
+            relative_age(now, visit.t)
+        ));
+    }
+    if missing.is_empty() && stale.is_empty() && dead_history.is_empty() {
+        out("\n  nothing to clean up.\n");
+    } else {
+        out(&format!("\n  clean up: {CONFIG} tidy --dry-run\n"));
     }
     Ok(0)
 }
@@ -3780,8 +4059,14 @@ fn cmd_init() -> Res<i32> {
     out("  SD_ALIAS=$1; SD_JUMPED_TO=$_sd_dir; export SD_ALIAS SD_JUMPED_TO;\n");
     out("  return 0;\n");
     out("};\n");
+    let mut forward: Vec<String> = move_verbs()
+        .iter()
+        .map(|verb| format!("[ \"${{1-}}\" = \"{verb}\" ]"))
+        .collect();
+    forward.push("([ \"${1:0:1}\" = \"@\" ])".to_string());
+    forward.push("([ \"${1:0:1}\" = \"-\" ] && [ \"${1-}\" != \"-\" ])".to_string());
     out(&format!("{MOVE}() {{\n"));
-    out("  if [ \"${1-}\" = \"ls\" ] || [ \"${1-}\" = \"i\" ] || [ \"${1-}\" = \"print\" ] || [ \"${1-}\" = \"top\" ] || [ \"${1-}\" = \"suggest\" ] || [ \"${1-}\" = \"adapt\" ] || [ \"${1-}\" = \"sha256\" ] || ([ \"${1:0:1}\" = \"@\" ]) || ([ \"${1:0:1}\" = \"-\" ] && [ \"${1-}\" != \"-\" ]); then\n");
+    out(&format!("  if {}; then\n", forward.join(" || ")));
     out(&format!("    command {MOVE} \"$@\";\n"));
     out("    return $?;\n");
     out("  fi;\n");
@@ -3863,8 +4148,13 @@ fn cmd_completions(shell: &str) -> Res<i32> {
         out("}\n");
         out(&format!("complete -o filenames -F _{MOVE}_complete {MOVE}\n"));
         out("\n");
+        let verbs = config_verbs()
+            .iter()
+            .map(|verb| verb.to_string())
+            .collect::<Vec<String>>()
+            .join(" ");
         out(&format!("_{CONFIG}_complete() {{\n"));
-        out("  local cur verbs=\"add rm rename import bind tag forget adapt migrate bench zoxide prompt edit init completions update revert releases uninstall doctor\"\n");
+        out(&format!("  local cur verbs=\"{verbs}\"\n"));
         out("  cur=\"${COMP_WORDS[COMP_CWORD]}\"\n");
         out("  COMPREPLY=( $(compgen -W \"$verbs\" -- \"$cur\") )\n");
         out("}\n");
@@ -3880,8 +4170,13 @@ fn cmd_completions(shell: &str) -> Res<i32> {
         out("  _describe -t aliases 'directory alias' _sd_aliases\n");
         out("fi\n");
         out("\n");
+        let verbs = config_verbs()
+            .iter()
+            .map(|verb| verb.to_string())
+            .collect::<Vec<String>>()
+            .join(" ");
         out(&format!("_{CONFIG}() {{\n"));
-        out("  local -a verbs=(add rm rename import bind forget migrate zoxide prompt edit init completions update revert releases uninstall doctor)\n");
+        out(&format!("  local -a verbs=({verbs})\n"));
         out("  _describe -t commands 'sdcfg command' verbs\n");
         out("}\n");
         out(&format!("compdef _{CONFIG} {CONFIG}\n"));
@@ -4497,6 +4792,34 @@ fn ca_import_walk(
     }
 }
 
+// Tag membership is a list of alias names, not a foreign key. These two helpers
+// keep it in step with a rename or an unbind, and drop a tag that ends up empty.
+fn prune_tag_members(cfg: &mut Config, name: &str) -> usize {
+    let mut changed = 0usize;
+    for (_, members) in &mut cfg.tags {
+        let before = members.len();
+        members.retain(|member| member != name);
+        changed += before - members.len();
+    }
+    cfg.tags.retain(|(_, members)| !members.is_empty());
+    changed
+}
+
+fn rename_tag_members(cfg: &mut Config, from: &str, to: &str) -> usize {
+    let mut changed = 0usize;
+    for (_, members) in &mut cfg.tags {
+        for member in members.iter_mut() {
+            if member == from {
+                *member = to.to_string();
+                changed += 1;
+            }
+        }
+        let mut seen = BTreeSet::new();
+        members.retain(|member| seen.insert(member.clone()));
+    }
+    changed
+}
+
 // ------------------------------------------------------------------ add/rm
 
 fn cmd_add(args: &Args) -> Res<i32> {
@@ -4555,7 +4878,18 @@ fn cmd_rm(args: &Args) -> Res<i32> {
     };
     out(&format!("removed {name} -> {target}\n"));
     cfg.aliases.remove(&name);
+    let pruned = if args.has("prune-tags") {
+        prune_tag_members(&mut cfg, &name)
+    } else {
+        0
+    };
     save_config(&cfg)?;
+    if pruned > 0 {
+        out(&format!(
+            "  dropped {name} from {pruned} tag{}\n",
+            if pruned == 1 { "" } else { "s" }
+        ));
+    }
     Ok(0)
 }
 
@@ -4581,8 +4915,19 @@ fn cmd_rename(args: &Args) -> Res<i32> {
     }
     cfg.aliases.remove(&from);
     cfg.aliases.insert(to.clone(), target.clone());
+    let carried = if args.has("tags") {
+        rename_tag_members(&mut cfg, &from, &to)
+    } else {
+        0
+    };
     save_config(&cfg)?;
     out(&format!("{from} -> {to} ({target})\n"));
+    if carried > 0 {
+        out(&format!(
+            "  carried the name into {carried} tag{}\n",
+            if carried == 1 { "" } else { "s" }
+        ));
+    }
     Ok(0)
 }
 
@@ -4726,6 +5071,40 @@ fn cmd_tag(args: &Args) -> Res<i32> {
     let key = tag_key(&args.word(0));
     let wanted: Vec<String> = args.words.iter().skip(1).cloned().collect();
     let slot = cfg.tags.iter().position(|(k, _)| k == &key);
+
+    if args.has("rename") {
+        if wanted.len() != 1 {
+            return Err(usage(format!(
+                "--rename takes one new name: {CONFIG} tag {key} --rename @new"
+            )));
+        }
+        let idx = match slot {
+            Some(i) => i,
+            None => {
+                return Err(die(format!(
+                    "no tag {key}. {CONFIG} tag lists the ones you have"
+                )))
+            }
+        };
+        let new_key = tag_key(&wanted[0]);
+        if new_key == key {
+            out(&format!("{key} already has that name\n"));
+            return Ok(0);
+        }
+        if cfg.tags.iter().any(|(k, _)| *k == new_key) {
+            return Err(die(format!("tag {new_key} already exists")));
+        }
+        let count = cfg.tags[idx].1.len();
+        cfg.tags[idx].0 = new_key.clone();
+        save_config(&cfg)?;
+        out(&format!(
+            "{key} -> {new_key} ({} {}, nothing was unbound)\n",
+            count,
+            if count == 1 { "alias" } else { "aliases" }
+        ));
+        out(&format!("  list them: {MOVE} {new_key}\n"));
+        return Ok(0);
+    }
 
     if args.has("remove") || args.has("drop") {
         let idx = match slot {
@@ -5109,6 +5488,112 @@ fn cmd_adopt(args: &Args) -> Res<i32> {
     }
     if added.is_empty() && replaced.is_empty() {
         out("  nothing to do, your config already matches\n");
+    }
+    Ok(0)
+}
+
+// --------------------------------------------------------------------- tidy
+
+fn cmd_tidy(args: &Args) -> Res<i32> {
+    let cfg = load_config()?;
+    let dirs = read_history();
+    let now = now_seconds();
+
+    let dead_aliases: Vec<String> = cfg
+        .aliases
+        .iter()
+        .filter(|(_, path)| !is_dir(&as_stored(path)))
+        .map(|(name, _)| name.clone())
+        .collect();
+    let dead_history: Vec<String> = dirs
+        .iter()
+        .filter(|(path, visit)| !is_dir(path) || decayed(visit, now) < FLOOR)
+        .map(|(path, _)| path.clone())
+        .collect();
+    let mut stale = 0usize;
+    for (_, members) in &cfg.tags {
+        for member in members {
+            if !cfg.aliases.contains_key(member) || dead_aliases.contains(member) {
+                stale += 1;
+            }
+        }
+    }
+
+    if dead_aliases.is_empty() && stale == 0 && dead_history.is_empty() {
+        out("nothing to tidy: your aliases, tags and history are in order\n");
+        return Ok(0);
+    }
+
+    if args.has("dry-run") {
+        out(&format!(
+            "would unbind {} {}, drop {} stale tag member{} and forget {} dead history entr{}:\n",
+            dead_aliases.len(),
+            if dead_aliases.len() == 1 { "alias" } else { "aliases" },
+            stale,
+            if stale == 1 { "" } else { "s" },
+            dead_history.len(),
+            if dead_history.len() == 1 { "y" } else { "ies" },
+        ));
+        for name in &dead_aliases {
+            out(&format!("  unbind {name} -> {}\n", cfg.aliases[name]));
+        }
+        for path in &dead_history {
+            out(&format!("  forget {path}\n"));
+        }
+        out(&format!("\n  do it: {} tidy --yes\n", CONFIG));
+        return Ok(0);
+    }
+
+    if !args.has("yes") && unsafe { isatty(0) } == 1 {
+        out(&format!(
+            "  unbind {} {}, drop {} stale tag member{} and forget {} dead history entr{}? [y/N] ",
+            dead_aliases.len(),
+            if dead_aliases.len() == 1 { "alias" } else { "aliases" },
+            stale,
+            if stale == 1 { "" } else { "s" },
+            dead_history.len(),
+            if dead_history.len() == 1 { "y" } else { "ies" },
+        ));
+        flush_out();
+        let answer = read_line().unwrap_or_default();
+        if lower(&trim(&answer)) != "y" {
+            out("  ok, left alone\n");
+            return Ok(0);
+        }
+    }
+
+    let mut next = cfg.clone();
+    for name in &dead_aliases {
+        next.aliases.remove(name);
+    }
+    for (_, members) in &mut next.tags {
+        members.retain(|member| {
+            cfg.aliases.contains_key(member) && !dead_aliases.contains(member)
+        });
+    }
+    next.tags.retain(|(_, members)| !members.is_empty());
+    if !dead_aliases.is_empty() || stale > 0 {
+        save_config(&next)?;
+    }
+    if !dead_history.is_empty() {
+        let root = ca_history_without(&dirs, &dead_history);
+        write_atomic(&history_file(), &(json_dump(&root, 2, 0) + "\n"), false)?;
+    }
+
+    out(&format!(
+        "tidied: unbound {} {}, dropped {} stale tag member{}, forgot {} dead history entr{}\n",
+        dead_aliases.len(),
+        if dead_aliases.len() == 1 { "alias" } else { "aliases" },
+        stale,
+        if stale == 1 { "" } else { "s" },
+        dead_history.len(),
+        if dead_history.len() == 1 { "y" } else { "ies" },
+    ));
+    for name in &dead_aliases {
+        out(&format!("  unbound {name}\n"));
+    }
+    for path in &dead_history {
+        out(&format!("  forgot {path}\n"));
     }
     Ok(0)
 }

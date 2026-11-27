@@ -25,8 +25,8 @@ Set Padding 16
 Env SIMPLEDIR_CONFIG_DIR "/tmp/simpledir-demo"
 Env SIMPLEDIR_NO_UPDATE_CHECK "1"
 
-# the tagline carries the release: rewritten in Rust, same shortcuts, so that is
-# what the recording opens on.
+# the tagline carries the release: see it all, tidy it up, so that is what the
+# recording opens on.
 Type "cd ~ && sdcfg --version" Enter
 Sleep 1200ms
 
@@ -66,6 +66,16 @@ Type "sdcfg tag @desk dots downloads shots" Enter
 Sleep 1300ms
 Type "sd @desk" Enter
 Sleep 1700ms
+
+# v13: the log was already doing the work; now you can see it and tidy it
+Type "clear" Enter
+Sleep 600ms
+Type "sd recent --top 4" Enter
+Sleep 1400ms
+Type "sd stats" Enter
+Sleep 1500ms
+Type "sdcfg tidy --dry-run" Enter
+Sleep 1500ms
 
 # bench: an earlier release was about being fast, and it ships the measuring
 # stick rather than a number you have to take on trust

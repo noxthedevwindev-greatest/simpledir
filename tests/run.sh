@@ -48,9 +48,13 @@ check() { # check <label> <expected-exit> <command...>
   fi
 }
 
-contains() { # contains <label> <needle> <command...>
+contains() { # contains <label> <needle> <command...> | <text>
   local label=$1 needle=$2; shift 2
-  local out; out=$("$@" 2>&1)
+  local out
+  # One leftover argument is captured output, not a one-word command. Trusting
+  # the shell's "command not found" message to echo the text hid a test whose
+  # command substitution had failed and left an empty string behind.
+  if [ $# -eq 1 ]; then out=$1; else out=$("$@" 2>&1); fi
   if [[ $out == *"$needle"* ]]; then
     pass=$((pass + 1)); printf 'ok   %s\n' "$label"
   else
@@ -58,9 +62,10 @@ contains() { # contains <label> <needle> <command...>
   fi
 }
 
-lacks() { # lacks <label> <needle> <command...>
+lacks() { # lacks <label> <needle> <command...> | <text>
   local label=$1 needle=$2; shift 2
-  local out; out=$("$@" 2>&1)
+  local out
+  if [ $# -eq 1 ]; then out=$1; else out=$("$@" 2>&1); fi
   if [[ $out != *"$needle"* ]]; then
     pass=$((pass + 1)); printf 'ok   %s\n' "$label"
   else
@@ -559,6 +564,58 @@ printf '' > "$THR/history.json"
 check "an empty log still jumps"      0 sh -c "env SIMPLEDIR_CONFIG_DIR='$THR' '$SD' print one"
 rm -rf "$THR"
 
+# --- sd recent, sd stats and sdcfg tidy ---------------------------------------
+# `top` ranks by score; `recent` answers "where did I just come from?". Both are
+# arithmetic over the same log. `stats` reports the shape of things, and `tidy`
+# is the write half that acts on what it finds. HOME is isolated so a developer's
+# real shell history cannot leak into the counts.
+REC=$(mktemp -d); mkdir -p "$REC/cfg" "$REC/home" "$REC/one" "$REC/two" "$REC/dead"
+rec() { env HOME="$REC/home" SIMPLEDIR_CONFIG_DIR="$REC/cfg" SIMPLEDIR_NO_UPDATE_CHECK=1 "$@"; }
+rec "$CFG" add one "$REC/one" >/dev/null
+rec "$CFG" add two "$REC/two" >/dev/null
+rec "$CFG" add dead "$REC/dead" >/dev/null
+NOW=$(date +%s)
+printf '{"version":1,"dirs":{"%s/one":{"n":5,"t":%s},"%s/two":{"n":9,"t":%s},"%s/dead":{"n":4,"t":%s}}}' \
+  "$REC" "$((NOW-60))" "$REC" "$((NOW-7200))" "$REC" "$((NOW-100000))" > "$REC/cfg/history.json"
+rmdir "$REC/dead"
+
+recent_out=$(rec "$SD" recent)
+has "recent marks a named dir"       "[named]" "$recent_out"
+has "recent marks a dead dir"        "[gone]"  "$recent_out"
+has "recent ages an old visit"       "2h ago"  "$recent_out"
+check "recent is newest first" 0 bash -c \
+  "env HOME='$REC/home' SIMPLEDIR_CONFIG_DIR='$REC/cfg' '$SD' recent | awk '/^  / {print \$3; exit}' | grep -qF '$REC/one'"
+check "recent --top limits" 0 bash -c \
+  "[[ \$(env HOME='$REC/home' SIMPLEDIR_CONFIG_DIR='$REC/cfg' '$SD' recent --top 1 | grep -cF '$REC/') -eq 1 ]]"
+check "recent --json is valid json" 0 bash -c \
+  "env HOME='$REC/home' SIMPLEDIR_CONFIG_DIR='$REC/cfg' '$SD' recent --json | python3 -c 'import json,sys; json.load(sys.stdin)'"
+contains "recent --json carries an age" '"age"' rec "$SD" recent --json
+contains "recent --json carries a score" '"score"' rec "$SD" recent --json
+contains "recent --top rejects zero" "--top wants a positive number" \
+  "$(rec "$SD" recent --top 0 2>&1)"
+
+stats_out=$(rec "$SD" stats)
+has "stats counts aliases"      "aliases: 3 (1 missing)" "$stats_out"
+has "stats counts history"      "history: 3 (2 alive, 1 dead)" "$stats_out"
+has "stats says what to clean"  "sdcfg tidy --dry-run" "$stats_out"
+contains "stats --json is valid json" '"aliases"' rec "$SD" stats --json
+check "stats --json parses" 0 bash -c \
+  "env HOME='$REC/home' SIMPLEDIR_CONFIG_DIR='$REC/cfg' '$SD' stats --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d[\"missing_aliases\"] == 1 and d[\"dead_history\"] == 1'"
+contains "stats sees history disabled" '"recording": false' \
+  "$(env SIMPLEDIR_NO_HISTORY=1 HOME="$REC/home" SIMPLEDIR_CONFIG_DIR="$REC/cfg" "$SD" stats --json)"
+
+tidy_out=$(rec "$CFG" tidy --dry-run)
+has "tidy --dry-run says would" "would unbind 1 alias" "$tidy_out"
+has "tidy --dry-run keeps its word" "forget 1 dead history entry" "$tidy_out"
+check "tidy --dry-run wrote nothing" 0 grep -q '"dead"' "$REC/cfg/config.json"
+check "tidy --dry-run kept the log" 0 grep -q "$REC/dead" "$REC/cfg/history.json"
+contains "tidy reports what it did" "tidied: unbound 1 alias" rec "$CFG" tidy --yes
+check "tidy unbound the dead alias" 1 rec "$SD" print dead
+check "tidy forgot the dead path" 0 bash -c "! grep -q '$REC/dead' '$REC/cfg/history.json'"
+check "tidy kept the live alias" 0 rec "$SD" print one
+contains "nothing left to tidy" "nothing to tidy" rec "$CFG" tidy
+rm -rf "$REC"
+
 # --- the verb lists cannot drift from the dispatch ----------------------------
 # Twice now a verb has reached the dispatch but not the list in front of it: the
 # shell wrapper did not forward `adapt` in v8.0.1, and the fast path's verb list
@@ -762,9 +819,9 @@ has     "bench still times something with no aliases" "process startup" "$out"
 rm -rf "$BN" "$BN2"
 
 # --- tags: named groups of aliases -------------------------------------------
-# A tag is a group of *names*, not paths, so renaming or rebinding an alias
-# updates every tag that mentions it and `sd @work dots` can never disagree with
-# `sd dots` about where dots is.
+# A tag is a group of *names*, not paths, so `rename --tags` carries a renamed
+# alias into every tag that held it and `rm --prune-tags` drops an unbound one.
+# `sd @work dots` can never disagree with `sd dots` about where dots is.
 TG=$(mktemp -d); mkdir -p "$TG/cfg" "$TG/a" "$TG/b" "$TG/c"
 tg() { env SIMPLEDIR_CONFIG_DIR="$TG/cfg" "$@"; }
 tg "$CFG" add work "$TG/a" >/dev/null
@@ -819,6 +876,21 @@ check   "ls --names stays one per line" 0 bash -c \
 check   "ls --json keeps the config shape" 0 bash -c \
   "! env SIMPLEDIR_CONFIG_DIR='$TG/cfg' '$SD' ls --json | grep -q 'tags'"
 check   "an unknown tag on ls fails"   1 tg "$SD" ls @nope
+
+# a rename or an unbind can carry the tag membership with it, and a tag itself
+# can be renamed without rebuilding it by hand
+tg "$CFG" tag @movable play >/dev/null
+contains "rename --tags carries membership" "carried the name into 1 tag" "$(tg "$CFG" rename --tags work work2)"
+contains "the renamed alias is in the tag" "work2" tg "$SD" @life
+lacks   "the old name is out of the tag"  "work " "$(tg "$SD" @life)"
+contains "rm --prune-tags drops membership" "dropped play from 1 tag" "$(tg "$CFG" rm --prune-tags play)"
+lacks   "the unbound alias is out of the tag" "play" tg "$SD" @life
+contains "tag --rename moves the group" "@life -> @renamed" "$(tg "$CFG" tag @life --rename @renamed)"
+contains "the renamed tag still lists" "work2" tg "$SD" @renamed
+check   "tag --rename needs a new name" 2 tg "$CFG" tag @renamed --rename
+tg "$CFG" tag @spare dots >/dev/null
+check   "tag --rename refuses an existing name" 1 tg "$CFG" tag @renamed --rename @spare
+contains "and says which one exists" "@spare already exists" "$(tg "$CFG" tag @renamed --rename @spare 2>&1)"
 rm -rf "$TG"
 
 # --- project aliases ----------------------------------------------------------
@@ -1230,8 +1302,10 @@ check   "revert no-op left a working binary" 0 "$REL/installed-same" --version
 # The asset name has changed twice across releases: sd-linux-<arch> (v6+), sd
 # (v5.0.0), simpledir (v3-v4). `--to` has to try all of them, and has to accept a
 # legacy build that calls itself `simpledir` rather than `sd` -- it is still
-# simpledir, and refusing it looked like a corrupt download.
-if command -v g++ >/dev/null 2>&1; then
+# simpledir, and refusing it looked like a corrupt download. Some boxes ship
+# only `c++`, so use either driver for these tiny stubs.
+CXX=${CXX:-$(command -v g++ || command -v c++ || true)}
+if [ -n "$CXX" ]; then
   mkdir -p "$REL/download/v5.0.0" "$REL/download/v4.0.0"
   cp "$REL/latest/download/$asset" "$REL/download/v5.0.0/sd"
   # a v4-shaped asset: same program, older name, older version
@@ -1245,7 +1319,7 @@ int main(int argc, char** argv) {
   return 0;
 }
 LEOF
-  g++ -std=c++17 -O1 -o "$REL/download/v4.0.0/simpledir" "$REL/legacy.cpp" 2>/dev/null
+  "$CXX" -std=c++17 -O1 -o "$REL/download/v4.0.0/simpledir" "$REL/legacy.cpp" 2>/dev/null
 fi
 contains "--to finds the v5 'sd' asset"   "done" rel v5 update --to v5.0.0
 contains "--to finds the v4 'simpledir' asset" "done" rel v4 update --to v4.0.0
@@ -1284,7 +1358,7 @@ rm -f "$REL/legacy.cpp"
 # the tag as one executable file. Fall back to the source of the tag so `--to`
 # keeps its promise for every published version, and say where it came from.
 mkdir -p "$REL/raw/noxthedevwindev-greatest/simpledir/v2.0.0"
-if command -v g++ >/dev/null 2>&1; then
+if [ -n "$CXX" ]; then
   cat > "$REL/legacy2.cpp" <<'LEOF'
 #include <cstdio>
 #include <cstring>
@@ -1294,7 +1368,7 @@ int main(int argc, char** argv) {
   return 0;
 }
 LEOF
-  g++ -std=c++17 -O1 -o "$REL/raw/noxthedevwindev-greatest/simpledir/v2.0.0/simpledir" \
+  "$CXX" -std=c++17 -O1 -o "$REL/raw/noxthedevwindev-greatest/simpledir/v2.0.0/simpledir" \
       "$REL/legacy2.cpp" 2>/dev/null
 fi
 contains "--to falls back to the source of the tag" "source file from" \
@@ -1310,9 +1384,9 @@ contains "--to installed the source fallback" "done" \
 # real v1.0.0 tag contains a program whose --version says 2.0.0, and silently
 # believing either number is how you end up not trusting the tool.
 mkdir -p "$REL/raw/noxthedevwindev-greatest/simpledir/v1.5.0"
-if command -v g++ >/dev/null 2>&1; then
+if [ -n "$CXX" ]; then
   sed 's/2\.0\.0/1.4.0/' "$REL/legacy2.cpp" > "$REL/legacy3.cpp"
-  g++ -std=c++17 -O1 -o "$REL/raw/noxthedevwindev-greatest/simpledir/v1.5.0/simpledir" \
+  "$CXX" -std=c++17 -O1 -o "$REL/raw/noxthedevwindev-greatest/simpledir/v1.5.0/simpledir" \
       "$REL/legacy3.cpp" 2>/dev/null
 fi
 out=$(env SIMPLEDIR_RELEASE_URL="file://$REL" SIMPLEDIR_SOURCE_URL="file://$REL/raw" \
@@ -1526,6 +1600,13 @@ contains "bash comp verbs"      "uninstall" "$CFG" completions bash
 contains "zsh completions"      "#compdef" "$CFG" completions zsh
 check "completions reject junk" 2 "$CFG" completions fish
 check "generated bash comp is valid bash" 0 bash -n <("$CFG" completions bash)
+# The verb list in the completion script used to be a literal that drifted from
+# the dispatch. It is generated from config_verbs() now; prove every verb the
+# help advertises is actually offered to the shell.
+for verb in $cfg_verbs; do
+  case $verb in --help|--version) continue ;; esac
+  contains "bash completion offers $verb" "$verb" "$CFG" completions bash
+done
 
 # --- install.sh --------------------------------------------------------------
 # offline: the release fetcher is pointed at a local stand-in for a published

@@ -1,7 +1,7 @@
 # Maintainer: NoxTheDev <https://github.com/noxthedevwindev-greatest>
 # Contributor: Your Name <you@example.com>
 pkgname=simpledir
-pkgver=12.0.0
+pkgver=13.0.0
 pkgrel=1
 pkgdesc="Named directory shortcuts for your shell - a frecency-aware zoxide alternative"
 arch=('x86_64' 'aarch64')
@@ -22,11 +22,11 @@ makedepends=('rust')
 #
 # Bumping a release means regenerating one line:
 #   updpkgsums
-# TODO(v12): the v12.0.0 tag is not published yet, so this is a placeholder.
+# TODO(v13): the v13.0.0 tag is not published yet, so this is a placeholder.
 # Replace it with the tarball's real sha256 once the tag exists. Keep the
 # entry itself: verifying the bytes makepkg builds from is the whole point.
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('REPLACE_WITH_V12_TARBALL_SHA256')
+sha256sums=('REPLACE_WITH_V13_TARBALL_SHA256')
 # GitHub regenerates these tarballs on occasion, which occasionally changes the
 # hash for an unchanged tag. That is the trade for the guarantee above: a mismatch
 # stops the build loudly instead of quietly installing different bytes.

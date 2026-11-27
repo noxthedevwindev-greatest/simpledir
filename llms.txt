@@ -20,7 +20,7 @@ Linux. MIT. Zero dependencies beyond `curl` — the binary is linked statically.
 ## Install
 
 ```
-curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v12.0.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v13.0.0/install.sh | bash
 ```
 
 The installer detects the platform, downloads a prebuilt `sd-linux-x86_64` or
@@ -55,6 +55,8 @@ sd /some/path              a raw path, cd'd as-is
 sd ls [<query>] [--long]   list jumpable aliases; --names one per line; --json the config shape
 sd print <alias[/sub]>     print the directory without cd'ing
 sd top [<query>] [--json]  the frecency log, best first
+sd recent [<query>] [--top N] [--json]  the same log, newest visit first
+sd stats [--json]          alias, tag and history counts; missing and dead entries
 sd suggest [<query>]       directories from your shell history worth naming; --top N, --json
 sd i [<query>]             interactive picker; fzf if installed, numbered list otherwise
 ```
@@ -63,12 +65,14 @@ sd i [<query>]             interactive picker; fzf if installed, numbered list o
 
 ```
 sdcfg add [<name>] [<path>]   bind; name defaults to the directory basename, path to $PWD; --force; --keep-symlinks
-sdcfg rm <name>               remove an alias
-sdcfg rename <old> <new>      rename, keeping the path; --force
+sdcfg rm <name>               remove an alias; --prune-tags drops it from any tags
+sdcfg rename <old> <new>      rename, keeping the path; --force; --tags carries tag membership
 sdcfg import <dir>            bind every subdirectory of a tree; --depth, --prefix, --force, --hidden, --dry-run, --keep-symlinks
 sdcfg bind                    create aliases from what `sd suggest` found; --top N, --dry-run
 sdcfg forget                  drop directories from the visit log; --all, --missing, --path P, --yes
-sdcfg migrate                migrate the config file v1 -> v2; --dry-run
+sdcfg tidy [--dry-run]        unbind dead aliases, drop stale tag members, forget dead visits; --yes
+sdcfg tag @old --rename @new  rename a tag without rebuilding it
+sdcfg migrate                migrate the config file v1 -> v3; --dry-run
 sdcfg zoxide                  import the directories zoxide knows about; --bind, --top N, --dry-run
 sdcfg edit [<editor>]         open the config in $EDITOR
 sdcfg update                  check for a newer release, ask, then install; --check; --yes; --to vX.Y.Z
@@ -209,6 +213,14 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ## Version history
 
+- 13.0.0 — read-only visibility and one cleanup command. `sd recent` lists
+  remembered directories by last visit (with `--top N` and `--json`), `sd stats`
+  reports alias/tag/history counts including missing aliases and dead visits, and
+  `sdcfg tidy --dry-run`/`--yes` removes them atomically. `sdcfg rename --tags`,
+  `sdcfg rm --prune-tags` and `sdcfg tag @old --rename @new` keep tag membership
+  in step. The shell wrapper's forwarded verbs and the shell completion verb lists
+  are now generated from the dispatch sets instead of maintained as literals.
+  Tagline: `see it all, tidy it up`.
 - 12.0.0 — full recode from C++ to Rust: one std-only file, `src/main.rs` (Rust
   2021, no crates, no Cargo.toml), built with `rustc --edition 2021 -O
   -C strip=symbols -o sd src/main.rs` and a static libc when available. Same data
@@ -293,7 +305,7 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ```
 make        # one rustc invocation over one file, static libc when available
-make test   # 645 assertions against the compiled binary, no network
+make test   # 707 assertions against the compiled binary, no network
 make assets # dist/ (binary, main.rs, install.sh, SHA256SUMS, mode 755)
 make release
 ```
@@ -305,7 +317,7 @@ src/main.rs         the entire program (Rust 2021, std-only). installed as `sd`,
 sd                  build output, gitignored
 install.sh          the curl | bash installer
 tests/run.sh        test suite, plain bash, drives the compiled binary
-docs/demo.tape      vhs script that produces docs/demo.gif
+docs/demo.tape      vhs script for a local demo (the gif is not shipped)
 packaging/PKGBUILD  Arch package definition
 packaging/nix/      a nixpkgs expression
 Makefile            binaries / install / uninstall / test / assets / release
