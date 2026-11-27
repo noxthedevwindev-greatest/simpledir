@@ -1886,13 +1886,17 @@ contains "the stand-in release asset works" "sd " \
   "$PUBLISH_DIR/releases/latest/download/sd-linux-$arch" --version
 
 helper="$FAKEHOME/install-here"
+# The helper pins PATH to the boring system paths so a stray tool can't win. On
+# GitHub's runners rustc may live outside them, though, and --source has to find
+# it: add only its directory, not the whole shell PATH the test started with.
+rustc_dir=$(dirname "$(command -v rustc)")
 cat > "$helper" <<EOF
 #!/usr/bin/env bash
 # install into a throwaway HOME, with the network stubbed out.
 # \$1 is the fake home, the rest are install.sh's own arguments.
 home=\$1; shift
 mkdir -p "\$home"
-env HOME="\$home" SHELL=/bin/bash PATH="/usr/bin:/bin" \\
+env HOME="\$home" SHELL=/bin/bash PATH="/usr/bin:/bin:$rustc_dir" \\
     SIMPLEDIR_BASE_URL="file://$PUBLISH_DIR" \\
     SIMPLEDIR_SOURCE_URL="file://$ROOT" \\
     bash "$ROOT/install.sh" "\$@"
