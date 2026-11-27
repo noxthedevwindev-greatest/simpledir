@@ -78,16 +78,17 @@
 <span class="p">$</span> <span class="c">sd -</span>                 <span class="o">previous directory</span>
 <span class="p">$</span> <span class="c">sd</span>                    <span class="o">$HOME</span>
 <span class="p">$</span> <span class="c">sd /some/path</span>          <span class="o">a raw path, cd'd as-is</span>
-<span class="p">$</span> <span class="c">sd ls [query]</span>         <span class="o">list aliases; --names or --json</span>
+<span class="p">$</span> <span class="c">sd ls [query]</span>         <span class="o">list aliases; --long, --names, --json</span>
 <span class="p">$</span> <span class="c">sd print name[/sub]</span>   <span class="o">write the path, don't cd</span>
 <span class="p">$</span> <span class="c">sd top [query]</span>        <span class="o">frecency, best first; --json</span>
 <span class="p">$</span> <span class="c">sd recent [query]</span>     <span class="o">newest visits; --top N, --json</span>
 <span class="p">$</span> <span class="c">sd stats</span>              <span class="o">counts and dead paths; --json</span>
-<span class="p">$</span> <span class="c">sd suggest [query]</span>    <span class="o">mine shell history; --json</span>
+<span class="p">$</span> <span class="c">sd suggest [query]</span>    <span class="o">mine shell history; --top N, --json</span>
 <span class="p">$</span> <span class="c">sd i [query]</span>          <span class="o">interactive picker (fzf)</span>
 <span class="p">$</span> <span class="c">sd adapt [--top N]</span>    <span class="o">unnamed directories you keep visiting</span>
 <span class="p">$</span> <span class="c">sd sha256 file</span>        <span class="o">hash a download yourself</span>
-<span class="p">$</span> <span class="c">sd --help</span>              <span class="o">this text</span></pre>
+<span class="p">$</span> <span class="c">sd --help</span>              <span class="o">this text</span>
+<span class="p">$</span> <span class="c">sd --version</span>           <span class="o">print the version and exit</span></pre>
         </div>
         <div class="terminal">
           <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="term-title">sdcfg — changes things, never moves you</span></div>
@@ -109,9 +110,15 @@
 <span class="p">$</span> <span class="c">sdcfg edit [editor]</span>      <span class="o">open config in $EDITOR</span>
 <span class="p">$</span> <span class="c">sdcfg init</span>                <span class="o">print the shell wrapper</span>
 <span class="p">$</span> <span class="c">sdcfg prompt bash|zsh</span>    <span class="o">print the prompt segment</span>
-<span class="p">$</span> <span class="c">sdcfg completions bash|zsh</span>
-<span class="p">$</span> <span class="c">sdcfg update | revert | releases</span>
-<span class="p">$</span> <span class="c">sdcfg uninstall | doctor | bench</span></pre>
+<span class="p">$</span> <span class="c">sdcfg completions bash|zsh</span> <span class="o">print a completion script</span>
+<span class="p">$</span> <span class="c">sdcfg update [--check|--yes|--to vX.Y.Z]</span>
+<span class="p">$</span> <span class="c">sdcfg revert</span>             <span class="o">go back to the previous binary</span>
+<span class="p">$</span> <span class="c">sdcfg releases</span>           <span class="o">list published releases</span>
+<span class="p">$</span> <span class="c">sdcfg uninstall</span>          <span class="o">remove binaries and wrapper</span>
+<span class="p">$</span> <span class="c">sdcfg doctor</span>              <span class="o">check the install</span>
+<span class="p">$</span> <span class="c">sdcfg bench [--runs N]</span>   <span class="o">measure a jump on this machine</span>
+<span class="p">$</span> <span class="c">sdcfg --help</span>             <span class="o">this text</span>
+<span class="p">$</span> <span class="c">sdcfg --version</span>          <span class="o">print the version and exit</span></pre>
         </div>
       </div>
       <div class="callout"><strong>The split is the point.</strong> <code>sd</code> is safe in a pipeline and safe to hit by reflex. <code>sdcfg</code> is a plain executable, so nothing can shadow it. <code>migrate</code> moves the config; <code>update</code> replaces the program. They are unrelated and neither calls the other.</div>
@@ -124,10 +131,13 @@
             <tr><td class="num">--force</td><td class="dim">overwrite an existing alias</td><td><code>sdcfg add</code></td></tr>
             <tr><td class="num">--keep-symlinks</td><td class="dim">store the symlink instead of its target</td><td><code>sdcfg add/import</code></td></tr>
             <tr><td class="num">--dry-run</td><td class="dim">show the cleanup plan without doing it</td><td><code>sdcfg tidy</code></td></tr>
-            <tr><td class="num">--yes</td><td class="dim">apply the cleanup without prompting</td><td><code>sdcfg tidy</code></td></tr>
+            <tr><td class="num">--yes</td><td class="dim">apply the cleanup without prompting; also answer an update prompt</td><td><code>sdcfg tidy/update</code></td></tr>
             <tr><td class="num">--tags</td><td class="dim">carry tag membership across a rename</td><td><code>sdcfg rename</code></td></tr>
             <tr><td class="num">--prune-tags</td><td class="dim">drop the alias from tags when removing it</td><td><code>sdcfg rm</code></td></tr>
-            <tr><td class="num">--top N</td><td class="dim">limit the list to N entries</td><td><code>sd top/recent/adapt</code></td></tr>
+            <tr><td class="num">--accept N</td><td class="dim">accept an adapt suggestion by number</td><td><code>sdcfg adapt</code></td></tr>
+            <tr><td class="num">--check / --to</td><td class="dim">look for an update / install an exact tag</td><td><code>sdcfg update</code></td></tr>
+            <tr><td class="num">--long</td><td class="dim">show tags and dead paths in the listing</td><td><code>sd ls</code></td></tr>
+            <tr><td class="num">--top N</td><td class="dim">limit the list to N entries</td><td><code>sd top/recent/suggest/adapt</code></td></tr>
             <tr><td class="num">--json</td><td class="dim">machine-readable output</td><td><code>sd ls/top/recent/stats/suggest</code></td></tr>
             <tr><td class="num">--purge</td><td class="dim">remove history as well as the alias</td><td><code>sdcfg rm/forget</code></td></tr>
             <tr><td class="num">--runs N</td><td class="dim">benchmark iterations</td><td><code>sdcfg bench</code></td></tr>
@@ -179,6 +189,8 @@
         <a href="https://github.com/noxthedevwindev-greatest/simpledir" target="_blank" rel="noopener">github</a>
         <a href="releases.html">releases</a>
         <a href="https://github.com/noxthedevwindev-greatest/simpledir/blob/main/AGENTS.md" target="_blank" rel="noopener">contributing</a>
+        <a href="zoxide.html">zoxide comparison</a>
+        <a href="gallery.html">gallery</a>
         <a href="commands.html">command reference</a>
       </nav>
     </div>

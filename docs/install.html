@@ -70,7 +70,7 @@
       <h2 class="section-title">One curl and you're done.</h2>
       <p class="section-intro">The installer works out your platform, downloads a verified binary, or compiles the one Rust file itself with <code>rustc</code>. It wires the shell function <em>after</em> installing the binary, because <code>sdcfg init</code> generates the wrapper.</p>
       <div class="terminal install-panel">
-        <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="term-title">install</span><button class="copy" id="copy" type="button" aria-label="copy install command">copy</button></div>
+        <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="term-title">install</span><button class="copy" id="copy" type="button" aria-label="copy install command">copy</button><span class="copy-status" id="copy-status" role="status" aria-live="polite"></span></div>
         <div class="install-line"><span class="prompt" aria-hidden="true">$</span><code id="cmd">curl -fsSL https://raw.githubusercontent.com/noxthedevwindev-greatest/simpledir/v13.0.0/install.sh | bash</code></div>
       </div>
       <p class="install-note">Prefer to look before you pipe? That's the right instinct — <code>curl -fsSL … -o install.sh</code>, then <code>less install.sh &amp;&amp; bash install.sh</code>.</p>
@@ -85,10 +85,11 @@
       <div class="terminal">
         <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="term-title">manual install</span></div>
 <pre><span class="p">$</span> <span class="c">curl -fsSLO https://github.com/noxthedevwindev-greatest/simpledir/releases/download/v13.0.0/simpledir-v13.0.0-linux-x86_64.tar.gz</span>
+<span class="p">$</span> <span class="c">curl -fsSLO https://github.com/noxthedevwindev-greatest/simpledir/releases/download/v13.0.0/SHA256SUMS</span>
+<span class="p">$</span> <span class="c">grep ' simpledir-v13.0.0-linux-x86_64.tar.gz$' SHA256SUMS | sha256sum -c -</span>
 <span class="p">$</span> <span class="c">tar -xzf simpledir-v13.0.0-linux-x86_64.tar.gz</span>
 <span class="p">$</span> <span class="c">cd simpledir-v13.0.0-linux-x86_64 &amp;&amp; install -m 755 sd ~/.local/bin/sd</span>
-<span class="p">$</span> <span class="c">ln -s sd ~/.local/bin/sdcfg</span>
-<span class="p">$</span> <span class="c">sha256sum -c SHA256SUMS</span></pre>
+<span class="p">$</span> <span class="c">ln -s sd ~/.local/bin/sdcfg</span></pre>
       </div>
       <div class="callout"><strong>Uninstall.</strong> <code>sdcfg uninstall</code> removes the binaries and the wrapper. With <code>SIMPLEDIR_RC</code> set, both <code>uninstall</code> and <code>doctor</code> touch only that file — never a guessed <code>~/.bashrc</code>.</div>
     </div>
@@ -119,6 +120,8 @@
         <a href="https://github.com/noxthedevwindev-greatest/simpledir" target="_blank" rel="noopener">github</a>
         <a href="releases.html">releases</a>
         <a href="https://github.com/noxthedevwindev-greatest/simpledir/blob/main/AGENTS.md" target="_blank" rel="noopener">contributing</a>
+        <a href="zoxide.html">zoxide comparison</a>
+        <a href="gallery.html">gallery</a>
         <a href="commands.html">command reference</a>
       </nav>
     </div>

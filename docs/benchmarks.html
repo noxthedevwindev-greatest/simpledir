@@ -68,7 +68,7 @@
     <div class="wrap">
       <p class="section-label">Benchmarks</p>
       <h2 class="section-title">Numbers, not adjectives.</h2>
-      <p class="section-intro">There's a measuring stick in the box rather than a number you have to take on trust. <code>sdcfg bench</code> forks the real binary and the floor twice, keeps the faster, and reports the median of 200 runs.</p>
+      <p class="section-intro">There's a measuring stick in the box rather than a number you have to take on trust. <code>sdcfg bench</code> forks the real binary, measures the <code>sd --version</code> floor before and after the cases, keeps the faster, and reports the median of 200 runs.</p>
       <div class="stats">
         <div class="stat"><div class="v">0.36<small> ms</small></div><div class="l">a jump, median of 200 forks</div></div>
         <div class="stat"><div class="v">+0.07<small> ms</small></div><div class="l">over just starting a process</div></div>
@@ -79,7 +79,7 @@
         <table>
           <thead><tr><th>case</th><th>median</th><th>over startup</th><th>what it's doing</th></tr></thead>
           <tbody>
-            <tr><td class="dim">process startup</td><td class="num">0.288 ms</td><td class="num">—</td><td class="dim">any process at all</td></tr>
+            <tr><td class="dim">sd --version</td><td class="num">0.288 ms</td><td class="num">—</td><td class="dim">this binary, no work</td></tr>
             <tr><td>sd &lt;alias&gt;</td><td class="num">0.356 ms</td><td class="num">+0.068 ms</td><td class="dim">the common case: hit a name</td></tr>
             <tr><td>sd ls</td><td class="num">0.382 ms</td><td class="num">+0.094 ms</td><td class="dim">6 aliases in the config</td></tr>
             <tr><td>sdcfg doctor</td><td class="num">0.587 ms</td><td class="num">+0.299 ms</td><td class="dim">every check it can do</td></tr>
@@ -116,6 +116,8 @@
         <a href="https://github.com/noxthedevwindev-greatest/simpledir" target="_blank" rel="noopener">github</a>
         <a href="releases.html">releases</a>
         <a href="https://github.com/noxthedevwindev-greatest/simpledir/blob/main/AGENTS.md" target="_blank" rel="noopener">contributing</a>
+        <a href="zoxide.html">zoxide comparison</a>
+        <a href="gallery.html">gallery</a>
         <a href="commands.html">command reference</a>
       </nav>
     </div>

@@ -22,17 +22,16 @@ makedepends=('rust')
 #
 # Bumping a release means regenerating one line:
 #   updpkgsums
-# TODO(v13): the v13.0.0 tag is not published yet, so this is a placeholder.
-# Replace it with the tarball's real sha256 once the tag exists. Keep the
-# entry itself: verifying the bytes makepkg builds from is the whole point.
+# Pinned to the published v13.0.0 archive. The checksum is of the tag's own
+# source tarball, not of a release asset generated later.
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('REPLACE_WITH_V13_TARBALL_SHA256')
+sha256sums=('ef6c3bb603d693aadce7fe23a2a90fb767b5fb6d62a63d17dedb38f26bdc1acd')
 # GitHub regenerates these tarballs on occasion, which occasionally changes the
 # hash for an unchanged tag. That is the trade for the guarantee above: a mismatch
 # stops the build loudly instead of quietly installing different bytes.
 
 build() {
-  cd "$srcdir/$pkgname"
+  cd "$srcdir/$pkgname-$pkgver"
   # one source file, std-only Rust 2021. linked statically when this system
   # has a static libc, because the dynamic loader costs more than the program
   # does; fall back to a dynamic link with a note rather than silently shipping
@@ -47,14 +46,14 @@ build() {
 }
 
 check() {
-  cd "$srcdir/$pkgname"
+  cd "$srcdir/$pkgname-$pkgver"
   # the suite needs bash and rustc; it compiles its own stub binaries (legacy
   # C++ fixtures are optional and skipped when their compiler is absent)
   bash tests/run.sh
 }
 
 package() {
-  cd "$srcdir/$pkgname"
+  cd "$srcdir/$pkgname-$pkgver"
   install -Dm755 sd "$pkgdir/usr/bin/sd"
   ln -s sd "$pkgdir/usr/bin/sdcfg"
   install -Dm644 src/main.rs "$pkgdir/usr/share/doc/$pkgname/main.rs"

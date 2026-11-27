@@ -72,7 +72,12 @@ fi
 case "$uname_m" in
   x86_64|amd64)      ARCH=x86_64 ;;
   aarch64|arm64)     ARCH=arm64 ;;
-  *) die "no prebuilt binary for $uname_m. build from source: bash $0 --source" ;;
+  *)
+    # --source is a promise to compile, so there is no asset name to validate.
+    # Dying here made the suggestion at the end of this very message a dead end.
+    [ "$FORCE_SOURCE" = "1" ] || die "no prebuilt binary for $uname_m. build from source: bash $0 --source"
+    ARCH=source
+    ;;
 esac
 
 ASSET="sd-linux-$ARCH"

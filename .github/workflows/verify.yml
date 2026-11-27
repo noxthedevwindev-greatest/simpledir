@@ -2,7 +2,7 @@
 # a tag whose commit disagrees with its own version string.
 #
 # The point is not that CI is greener than my laptop. The point is that the two
-# claims this repo makes -- "711 assertions pass" and "every published tag names
+# claims this repo makes -- "830 assertions pass" and "every published tag names
 # the version inside it" -- are checked by something that isn't a person
 # remembering to check them. v1.0.0 shipped four releases with a tag pointing one
 # commit late, and every test stubbed the thing that would have noticed.
@@ -13,12 +13,18 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
+  release:
+    types: [published]
 
 jobs:
   suite:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # audit-tags has to see every tag. A shallow checkout has none, so
+          # the audit used to pass by iterating an empty list.
+          fetch-depth: 0
 
       - name: build
         run: make
@@ -45,13 +51,26 @@ jobs:
 
   # Prove the released asset is the thing the source builds. Not bit-identical --
   # different toolchains and libc give different bytes -- but it must be static,
-  # must report the version the tag claims, and must actually jump.
+  # must report the version the tag claims, and must actually jump. Both arches
+  # get a runner; only the release event checks published bytes, because a tag
+  # push happens before `gh release create` has uploaded anything.
   release-asset:
-    runs-on: ubuntu-latest
     needs: suite
     if: startsWith(github.ref, 'refs/tags/')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            asset: sd-linux-x86_64
+          - runner: ubuntu-24.04-arm
+            asset: sd-linux-arm64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # the version check reads the tagged commit, not a shallow tip
+          fetch-depth: 0
 
       - name: build the same way make assets does
         run: make
@@ -75,3 +94,29 @@ jobs:
           mkdir -p "$RUNNER_TEMP/target"
           ./sdcfg add smoke "$RUNNER_TEMP/target"
           test "$(./sd print smoke)" = "$RUNNER_TEMP/target"
+
+      - name: published bytes agree with SHA256SUMS
+        if: github.event_name == 'release'
+        env:
+          ASSET: ${{ matrix.asset }}
+        run: |
+          tag=${GITHUB_REF_NAME}
+          base="https://github.com/noxthedevwindev-greatest/simpledir/releases/download/$tag"
+          mkdir -p "$RUNNER_TEMP/published"
+          cd "$RUNNER_TEMP/published"
+          curl -fsSLO "$base/SHA256SUMS"
+          awk '{print $2}' SHA256SUMS | while read -r name; do
+            curl -fsSLO "$base/$name"
+          done
+          sha256sum -c --strict SHA256SUMS
+          if [ ! -f "$ASSET" ]; then
+            echo "no published $ASSET in $tag; nothing to compare for this arch"
+            exit 0
+          fi
+          tarball=$(awk '$2 ~ /^simpledir-.*\.tar\.gz$/ {print $2; exit}' SHA256SUMS)
+          if [ -n "$tarball" ]; then
+            mkdir -p unpacked
+            tar -xzf "$tarball" -C unpacked
+            cmp "$ASSET" "unpacked/${tarball%.tar.gz}/sd"
+            echo "$ASSET matches the copy inside $tarball"
+          fi

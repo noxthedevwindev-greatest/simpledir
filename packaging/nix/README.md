@@ -24,7 +24,8 @@ a package install must not edit your rc file, so the wrapper is opt-in:
 
 ```bash
 nix profile install nixpkgs#simpledir   # or: nix run .
-eval "$(sdcfg init)" >> ~/.bashrc       # once
+sdcfg init >> ~/.bashrc                  # once, to make it persist
+eval "$(sdcfg init)"                     # or just this shell
 ```
 
 `sdcfg init` prints a block that survives being `eval`'d — see rule 14 in the

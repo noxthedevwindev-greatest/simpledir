@@ -478,13 +478,15 @@ measured on one laptop, median of 120 runs over 6 interleaved rounds:
 | static + section gc | 0.76 ms |
 
 **`sdcfg bench`** ships the measuring stick, so nobody has to take a table's word
-for it. it forks the real binary and reports median time *over process startup*,
-because without that baseline a millisecond figure means nothing:
+for it. it forks the real binary and reports median time *over the same binary
+doing no work* (`sd --version`), because without that baseline a millisecond
+figure means nothing. the floor is measured before and after the cases and the
+faster median is used for both the table and the paragraph beneath it:
 
 ```
   case                   median  over startup        best
   --------------------------------------------------------------------------
-  process startup      0.269 ms            --   0.230 ms   an empty program, for comparison
+  sd --version         0.269 ms            --   0.230 ms   this binary, no work
   sd <alias>           0.394 ms    +0.125 ms   0.331 ms   the common case: hit an alias
 ```
 
@@ -976,7 +978,7 @@ else with `SIMPLEDIR_BIN=/path/to/sd`.
 
 ```bash
 make                # build: one rustc invocation over one file, static libc when available
-make test           # 711 assertions, real bash subprocesses, no network
+make test           # 830 assertions, real bash subprocesses, no network
 make assets         # dist/: the binary, main.rs, install.sh, SHA256SUMS
 make release        # tag, push, publish with assets attached
 vhs docs/demo.tape  # record a demo (needs vhs + ttyd)

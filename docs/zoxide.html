@@ -71,15 +71,15 @@
       <p class="section-intro"><a href="https://github.com/ajeetdsouza/zoxide" target="_blank" rel="noopener">zoxide</a> is a great tool and this is a drop-in replacement: same frecency idea, same "remember a directory I never named" behaviour. It doesn't conflict, so you can run both and compare.</p>
       <div class="table-scroll">
         <table>
-          <thead><tr><th></th><th>zoxide</th><th>simpledir</th></tr></thead>
+          <thead><tr><th scope="col">feature</th><th scope="col">zoxide</th><th scope="col">simpledir</th></tr></thead>
           <tbody>
-            <tr><td class="dim">remembers dirs you never named</td><td class="dim">frecency-scored</td><td>frecency-scored, same half-life idea</td></tr>
-            <tr><td class="dim">remembers dirs you <em>named</em></td><td class="dim">no</td><td><strong>yes — that's the point</strong></td></tr>
-            <tr><td class="dim">state to maintain</td><td class="dim">sqlite db + daemon + shell hooks</td><td>two JSON files</td></tr>
-            <tr><td class="dim">config you can read and hand-edit</td><td class="dim">no</td><td>yes</td></tr>
-            <tr><td class="dim">your shell history</td><td class="dim">ignored</td><td>mined by <code>sd suggest</code></td></tr>
-            <tr><td class="dim">per-jump cost</td><td class="dim">sqlite query + daemon round trip</td><td class="num">0.36 ms, measured</td></tr>
-            <tr><td class="dim">coming from zoxide</td><td class="dim">—</td><td><code>sdcfg zoxide</code> imports what it knows</td></tr>
+            <tr><th scope="row" class="dim">remembers dirs you never named</th><td class="dim">frecency-scored</td><td>frecency-scored, same half-life idea</td></tr>
+            <tr><th scope="row" class="dim">remembers dirs you <em>named</em></th><td class="dim">no</td><td><strong>yes — that's the point</strong></td></tr>
+            <tr><th scope="row" class="dim">state to maintain</th><td class="dim">sqlite db + daemon + shell hooks</td><td>two JSON files</td></tr>
+            <tr><th scope="row" class="dim">config you can read and hand-edit</th><td class="dim">no</td><td>yes</td></tr>
+            <tr><th scope="row" class="dim">your shell history</th><td class="dim">ignored</td><td>mined by <code>sd suggest</code></td></tr>
+            <tr><th scope="row" class="dim">per-jump cost</th><td class="dim">sqlite query + daemon round trip</td><td class="num">0.36 ms, measured</td></tr>
+            <tr><th scope="row" class="dim">coming from zoxide</th><td class="dim">—</td><td><code>sdcfg zoxide</code> imports what it knows</td></tr>
           </tbody>
         </table>
       </div>
@@ -112,6 +112,8 @@
         <a href="https://github.com/noxthedevwindev-greatest/simpledir" target="_blank" rel="noopener">github</a>
         <a href="releases.html">releases</a>
         <a href="https://github.com/noxthedevwindev-greatest/simpledir/blob/main/AGENTS.md" target="_blank" rel="noopener">contributing</a>
+        <a href="zoxide.html">zoxide comparison</a>
+        <a href="gallery.html">gallery</a>
         <a href="commands.html">command reference</a>
       </nav>
     </div>

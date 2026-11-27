@@ -38,7 +38,7 @@ STATIC_FLAGS = -C target-feature=+crt-static
 # noise.
 DYNAMIC_FLAGS =
 
-.PHONY: all binaries install uninstall test assets release audit-tags check clean
+.PHONY: all binaries install uninstall test assets release clean-tree audit-tags check clean
 
 all: binaries
 
@@ -68,24 +68,27 @@ install: binaries
 	@echo "installed $(PREFIX)/sd and $(PREFIX)/sdcfg"
 	@# refresh rather than skip: a wrapper from an older version is stale, and
 	@# an empty one is broken. anything outside the markers is left alone.
+	@touch $(RC)
 	@$(PREFIX)/sdcfg init > $(RC).sd.tmp
 	@if grep -q '>>> simpledir >>>' $(RC); then \
 		cp -p $(RC) $(RC).bak.$(shell date +%Y%m%d%H%M%S); \
 		sed '/# >>> simpledir >>>/,/# <<< simpledir <<</d' $(RC) > $(RC).sd.new; \
 	else \
-		cp $(RC) $(RC).sd.new; \
+		cp -p $(RC) $(RC).sd.new; \
 	fi
-	@cat $(RC).sd.new > $(RC); \
-	printf '\n# >>> simpledir >>>\n' >> $(RC); \
-	cat $(RC).sd.tmp >> $(RC); \
-	printf '# <<< simpledir <<<\n' >> $(RC); \
+	@cp -p $(RC).sd.new $(RC).sd.final; \
+	printf '\n# >>> simpledir >>>\n' >> $(RC).sd.final; \
+	cat $(RC).sd.tmp >> $(RC).sd.final; \
+	printf '# <<< simpledir <<<\n' >> $(RC).sd.final; \
+	mv $(RC).sd.final $(RC); \
 	rm -f $(RC).sd.tmp $(RC).sd.new; \
 	echo "wired $(RC)"
 
 uninstall:
 	rm -f $(PREFIX)/sd $(PREFIX)/sdcfg
+	@touch $(RC)
 	cp -p $(RC) $(RC).bak.$(shell date +%Y%m%d%H%M%S)
-	sed -i '/# >>> simpledir >>>/,/# <<< simpledir <<</d' $(RC)
+	@cp -p $(RC) $(RC).sd.new && sed -i '/# >>> simpledir >>>/,/# <<< simpledir <<</d' $(RC).sd.new && mv $(RC).sd.new $(RC)
 	@echo "removed binaries + rc block (config kept in ~/.simpledir)"
 
 # release assets: the binary for this platform under the name the installer
@@ -112,7 +115,13 @@ assets: sd
 	@echo "--- $(SUMS) ---"
 	@cat dist/$(SUMS)
 
-release: test audit-tags assets
+clean-tree:
+	@git diff --quiet && git diff --cached --quiet && \
+	  test -z "$$(git ls-files --others --exclude-standard)" || { \
+	    echo "release needs a clean tree: commit or stash first"; exit 1; \
+	  }
+
+release: clean-tree test audit-tags assets
 	@version=$$(sed -n 's/^const VERSION_BASE: &str = "\(.*\)";/\1/p' src/main.rs); \
 	echo "releasing v$$version"; \
 	test -n "$$version" || { echo "could not read VERSION_BASE"; exit 1; }; \

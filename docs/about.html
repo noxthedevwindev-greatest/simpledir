@@ -78,11 +78,14 @@
             <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="term-title">~/.simpledir/config.json</span></div>
 <pre>{
   <span class="mono">"version"</span>: 3,
-  <span class="mono">"aliases"</span>: [
-    { <span class="mono">"name"</span>: <span class="hi">"dots"</span>, <span class="mono">"path"</span>: <span class="hi">"/home/you/.dotfiles"</span>,
-      <span class="mono">"tags"</span>: [<span class="hi">"@config"</span>] },
-    { <span class="mono">"name"</span>: <span class="hi">"nix"</span>, <span class="mono">"path"</span>: <span class="hi">"/etc/nixos"</span> }
-  ]
+  <span class="mono">"history"</span>: true,
+  <span class="mono">"aliases"</span>: {
+    <span class="hi">"dots"</span>: <span class="hi">"/home/you/.dotfiles"</span>,
+    <span class="hi">"nix"</span>: <span class="hi">"/etc/nixos"</span>
+  },
+  <span class="mono">"tags"</span>: {
+    <span class="hi">"config"</span>: [<span class="hi">"dots"</span>]
+  }
 }
 
 <span class="o"># plain JSON. edit it by hand if you want.</span>
@@ -97,7 +100,7 @@
         <div class="feature"><span class="icon">◍</span><h3>No daemon</h3><p>Nothing resident, nothing to start, nothing to hang. A socket round trip costs as much as parsing the log, so the log is parsed lazily.</p></div>
         <div class="feature"><span class="icon">◇</span><h3>No model, no network</h3><p>Every feature is <strong>arithmetic over data already on this machine</strong> — a half-life, a substring match, an edit distance.</p></div>
         <div class="feature"><span class="icon">▤</span><h3>Two JSON files</h3><p>One you edit, one it doesn't. Plain hand-editable files in <code>~/.simpledir</code> — no database, no proprietary format.</p></div>
-        <div class="feature"><span class="icon">✓</span><h3>711 assertions</h3><p>The suite drives the compiled binary through <strong>the same command line you do</strong>, in real bash subprocesses, with no network.</p></div>
+        <div class="feature"><span class="icon">✓</span><h3>830 assertions</h3><p>The suite drives the compiled binary through <strong>the same command line you do</strong>, in real bash subprocesses, with no network.</p></div>
       </div>
     </div>
   </section>
@@ -127,6 +130,8 @@
         <a href="https://github.com/noxthedevwindev-greatest/simpledir" target="_blank" rel="noopener">github</a>
         <a href="releases.html">releases</a>
         <a href="https://github.com/noxthedevwindev-greatest/simpledir/blob/main/AGENTS.md" target="_blank" rel="noopener">contributing</a>
+        <a href="zoxide.html">zoxide comparison</a>
+        <a href="gallery.html">gallery</a>
         <a href="commands.html">command reference</a>
       </nav>
     </div>

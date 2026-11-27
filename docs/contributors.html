@@ -60,18 +60,18 @@
   <section class="page-intro">
     <div class="wrap">
       <span class="crumb"><a href="index.html">simpledir</a> / contributors</span>
-      <h1>One file, 711 assertions, <span class="accent">no mysteries.</span></h1>
+      <h1>One file, 830 assertions, <span class="accent">no mysteries.</span></h1>
       <p class="lede">Built by NoxTheDev and anyone who sends a patch. Every behaviour change gets a test.</p>
     </div>
   </section>
   <section class="page">
     <div class="wrap">
       <p class="section-label">Contributors</p>
-      <h2 class="section-title">One file, 711 assertions, no mysteries.</h2>
+      <h2 class="section-title">One file, 830 assertions, no mysteries.</h2>
       <p class="section-intro">Built by NoxTheDev and anyone who sends a patch. The suite drives the compiled binary through the same command line you do, in real bash subprocesses.</p>
       <div class="people-grid">
         <div class="person accent"><span class="avatar">ND</span><h3>Maintainer</h3><p>NoxTheDev — design, code and releases.</p></div>
-        <div class="person"><span class="avatar">711</span><h3>Assertions</h3><p>Every behaviour change gets a test before it ships.</p></div>
+        <div class="person"><span class="avatar">830</span><h3>Assertions</h3><p>Every behaviour change gets a test before it ships.</p></div>
         <div class="person"><span class="avatar">13</span><h3>Releases</h3><p>One feature set per release, with verified assets.</p></div>
         <div class="person"><span class="avatar">0</span><h3>Dependencies</h3><p>curl is the only runtime tool; stdlib is the rest.</p></div>
       </div>
@@ -85,7 +85,7 @@
             <tr><td class="dim">read paths are never resolved</td><td><code>as_stored()</code> on read; <code>realpath()</code> only on add/import</td><td class="num">tests</td></tr>
             <tr><td class="dim">writes survive interruption</td><td>temp file plus atomic rename for config, history and updates</td><td class="num">tests</td></tr>
             <tr><td class="dim">downloads arrive together</td><td>published SHA256SUMS, verified before anything is run or replaced</td><td class="num">installer + suite</td></tr>
-            <tr><td class="dim">no network on a jump</td><td>read commands never touch the network; checks swallow their errors</td><td class="num">code + tests</td></tr>
+            <tr><td class="dim">no network on a jump</td><td><code>sd &lt;alias&gt;</code> and <code>sd print</code> never call out; the optional update nudge runs only on interactive listings and swallows errors</td><td class="num">code + tests</td></tr>
             <tr><td class="dim">a verb can't quietly vanish</td><td>wrapper forwarding and completions generated from dispatch sets</td><td class="num">suite</td></tr>
           </tbody>
         </table>
@@ -118,6 +118,8 @@
         <a href="https://github.com/noxthedevwindev-greatest/simpledir" target="_blank" rel="noopener">github</a>
         <a href="releases.html">releases</a>
         <a href="https://github.com/noxthedevwindev-greatest/simpledir/blob/main/AGENTS.md" target="_blank" rel="noopener">contributing</a>
+        <a href="zoxide.html">zoxide comparison</a>
+        <a href="gallery.html">gallery</a>
         <a href="commands.html">command reference</a>
       </nav>
     </div>

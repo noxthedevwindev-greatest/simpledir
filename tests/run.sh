@@ -772,6 +772,14 @@ has   "and the one it got"                   "downloaded:"         "$out"
 has   "and says nothing was changed"         "nothing was changed" "$out"
 check  "and nothing was installed" 1 ver_installed
 
+# a listed digest that is not a digest is tampering too, not "no checksum"
+build_ver 9.0.0
+printf 'not-a-real-digest  %s\n' "$ver_asset" > "$VER/pub/download/v9.0.0/SHA256SUMS"
+rm -f "$VER/installed"
+out=$(ver_update || true)
+has   "a malformed published checksum is fatal" "malformed checksum" "$out"
+check "and it installed nothing" 1 ver_installed
+
 # a sums file listing something else is 'unverified', not 'tampered'
 build_ver 9.0.0
 printf '%064d  some-other-file\n' 0 > "$VER/pub/download/v9.0.0/SHA256SUMS"
@@ -802,9 +810,11 @@ check   "bench exits 0"                  0 env SIMPLEDIR_CONFIG_DIR="$BN" "$CFG"
 contains "bench names itself"           "simpledir benchmark" "$out"
 contains "bench reports the version"    "$(env SIMPLEDIR_CONFIG_DIR="$BN" "$SD" --version | awk '{print $2}')" "$out"
 contains "bench times a jump"           "sd <alias>" "$out"
-contains "bench shows the startup floor" "process startup" "$out"
+contains "bench shows the startup floor" "sd --version" "$out"
+contains "bench names the floor honestly" "this binary, no work" "$out"
+lacks   "bench never calls true a floor" "any process at all" "$out"
 has     "bench prints milliseconds"     "ms" "$out"
-contains "bench explains the floor"     "before this program" "$out"
+contains "bench explains the floor"     "before it does any work" "$out"
 lacks   "bench promises nothing"        "guaranteed" "$out"
 check   "bench rejects a silly --runs"  2 env SIMPLEDIR_CONFIG_DIR="$BN" "$CFG" bench --runs 1
 contains "and says the range"           "5 to 2000" \
@@ -815,7 +825,7 @@ BN2=$(mktemp -d); printf 'not json' > "$BN2/config.json"
 check   "bench survives a broken config" 0 env SIMPLEDIR_CONFIG_DIR="$BN2" "$CFG" bench --runs 5
 check   "bench survives no config at all" 0 env SIMPLEDIR_CONFIG_DIR="$(mktemp -d)" "$CFG" bench --runs 5
 out=$(env SIMPLEDIR_CONFIG_DIR="$BN2" "$CFG" bench --runs 5 2>&1)
-has     "bench still times something with no aliases" "process startup" "$out"
+has     "bench still times something with no aliases" "sd --version" "$out"
 rm -rf "$BN" "$BN2"
 
 # --- tags: named groups of aliases -------------------------------------------
@@ -1198,6 +1208,10 @@ printf '[{"tag_name":"v%s","published_at":"2026-01-01T00:00:00Z","name":"same"}]
   > "$STUBS/api_same.json"
 printf '[{"tag_name":"v0.0.1","published_at":"2026-01-01T00:00:00Z","name":"old"}]\n' \
   > "$STUBS/api_old.json"
+# GitHub orders by date, not by stability. A prerelease on top must not yank
+# somebody onto half-finished work.
+printf '[{"tag_name":"v99.0.0-rc.1","published_at":"2026-02-01T00:00:00Z","name":"rc"},{"tag_name":"v%s","published_at":"2026-01-01T00:00:00Z","name":"stable"}]\n' "$me" \
+  > "$STUBS/api_pre.json"
 
 export SIMPLEDIR_UPDATE_URL="file://$STUBS/api_new.json"
 contains "update sees a newer release" "v99.0.0" "$CFG" update --check
@@ -1209,6 +1223,10 @@ check "update --check exits 0 when current" 0 "$CFG" update --check
 
 export SIMPLEDIR_UPDATE_URL="file://$STUBS/api_old.json"
 contains "old release isn't an update" "up to date" "$CFG" update --check
+
+export SIMPLEDIR_UPDATE_URL="file://$STUBS/api_pre.json"
+contains "update skips a newer prerelease" "newest release is v$me" "$CFG" update --check
+check   "a prerelease is not installed" 0 "$CFG" update --check
 
 export SIMPLEDIR_UPDATE_URL="file://$STUBS/missing.json"
 contains "unreachable api explains itself" "couldn't reach GitHub" "$CFG" update --check
@@ -1344,6 +1362,15 @@ check "the downgrade left the good copy behind" 0 bash -c \
 check "the promised cp really restores" 0 bash -c "
   cp '$REL/installed-back.previous' '$REL/installed-back' &&
   '$REL/installed-back' --version | grep -q '^sd '"
+
+# the built-in way back is atomic and leaves an executable. copying over the
+# live binary used to leave 0744 and a truncated file if the copy was cut short.
+check "revert restores the good binary" 0 env \
+  SIMPLEDIR_BIN="$REL/installed-back" SIMPLEDIR_NO_UPDATE_CHECK=1 "$CFG" revert
+check "revert leaves the binary executable" 0 bash -c \
+  "[ \"\$(stat -c %a '$REL/installed-back')\" = 755 ]"
+check "revert leaves no staging file" 0 bash -c \
+  "! compgen -G '$REL/installed-back.revert.*' >/dev/null"
 
 # with no prior install there is nothing to go back to, so it must not promise a file
 out=$(env SIMPLEDIR_RELEASE_URL="file://$REL" SIMPLEDIR_BIN="$REL/installed-fresh" \
@@ -1879,6 +1906,13 @@ check "install.sh refuses non-linux" 1 env SIMPLEDIR_NO_RC=1 bash -c \
 contains "non-linux message names the os" "Darwin" env SIMPLEDIR_NO_RC=1 bash -c \
   "$stub_uname '$helper' '$FAKEHOME/mac2'"
 
+# --source is an explicit promise to compile; it must not die on the very arch
+# check it tells you to bypass
+stub_arch="uname() { case \"\$1\" in -m) echo armv7l;; *) command uname \"\$1\";; esac; }; export -f uname;"
+check "install.sh --source works on an unsupported arch" 0 env SIMPLEDIR_NO_RC=1 bash -c \
+  "$stub_arch '$helper' '$FAKEHOME/armsrc' --source"
+check "--source installed a working binary" 0 "$FAKEHOME/armsrc/.local/bin/sd" --version
+
 check "install.sh installs sd"       0 env SIMPLEDIR_NO_RC=1 "$helper" "$FAKEHOME/plain"
 check "sd is executable"              0 "$FAKEHOME/plain/.local/bin/sd" --version
 check "sdcfg exists and runs"         0 "$FAKEHOME/plain/.local/bin/sdcfg" --version
@@ -2107,6 +2141,125 @@ check "wired shell uses the new install" 0 env -i HOME="$FAKEHOME/withrc" \
   bash --noprofile --norc -c "
   source '$wrapper'; [[ \$(type -P sd) == '$ROOT/sd' ]]"
 rm -f "$wrapper"
+
+# --- hardening: json, paths, flags and the make-level rc ---------------------
+UNI=$(mktemp -d); mkdir -p "$UNI/café"
+check "unicode alias adds" 0 env SIMPLEDIR_CONFIG_DIR="$UNI" "$CFG" add café "$UNI/café"
+out=$(env SIMPLEDIR_CONFIG_DIR="$UNI" "$SD" print café 2>&1)
+check "unicode alias prints" 0 env SIMPLEDIR_CONFIG_DIR="$UNI" "$SD" print café
+has "unicode path survives a round trip" "$UNI/café" "$out"
+cfg_out=$(cat "$UNI/config.json")
+has "unicode alias is stored once" '"café"' "$cfg_out"
+lacks "and never as mojibake" 'cafÃ©' "$cfg_out"
+rm -rf "$UNI"
+
+JUNK=$(mktemp -d)
+printf '{"version":3,"aliases":[]} junk\n' > "$JUNK/config.json"
+check "trailing JSON junk exits 1" 1 env SIMPLEDIR_CONFIG_DIR="$JUNK" "$SD" ls
+contains "trailing JSON junk is rejected" "not valid JSON" env \
+  SIMPLEDIR_CONFIG_DIR="$JUNK" "$SD" ls
+rm -rf "$JUNK"
+
+LIT=$(mktemp -d); mkdir -p "$LIT/\$HOME-lit"
+printf '{"version":3,"history":false,"aliases":{"lit":"%s/$HOME-lit"}}\n' "$LIT" \
+  > "$LIT/config.json"
+check "a literal \$HOME in a stored path resolves" 0 env SIMPLEDIR_CONFIG_DIR="$LIT" "$SD" print lit
+out=$(env SIMPLEDIR_CONFIG_DIR="$LIT" "$SD" print lit 2>&1)
+has "a stored \$HOME is not expanded on read" "$LIT/\$HOME-lit" "$out"
+rm -rf "$LIT"
+
+AMB=$(mktemp -d)
+mkdir -p "$AMB/work-alpha" "$AMB/work-beta" "$AMB/work-gamma"
+env SIMPLEDIR_CONFIG_DIR="$AMB" "$CFG" add work-alpha "$AMB/work-alpha" >/dev/null
+env SIMPLEDIR_CONFIG_DIR="$AMB" "$CFG" add work-beta "$AMB/work-beta" >/dev/null
+env SIMPLEDIR_CONFIG_DIR="$AMB" "$CFG" add work-gamma "$AMB/work-gamma" >/dev/null
+env SIMPLEDIR_CONFIG_DIR="$AMB" "$SD" work-gamma >/dev/null
+env SIMPLEDIR_CONFIG_DIR="$AMB" "$CFG" rm work-gamma >/dev/null
+check "an ambiguous prefix exits 1" 1 env SIMPLEDIR_CONFIG_DIR="$AMB" "$SD" print work
+contains "an ambiguous prefix says so" "matches several aliases" env \
+  SIMPLEDIR_CONFIG_DIR="$AMB" "$SD" print work
+lacks "an ambiguous prefix never falls back to frecency" "$AMB/work-gamma" \
+  "$(env SIMPLEDIR_CONFIG_DIR="$AMB" "$SD" print work 2>&1 || true)"
+rm -rf "$AMB"
+
+FLAGS=$(mktemp -d)
+check "sd ls rejects an unknown flag with exit 2" 2 env SIMPLEDIR_CONFIG_DIR="$FLAGS" "$SD" ls --bogus
+check "sd top rejects an unknown flag with exit 2" 2 env SIMPLEDIR_CONFIG_DIR="$FLAGS" "$SD" top --bogus
+check "sd adapt rejects an unknown flag with exit 2" 2 env SIMPLEDIR_CONFIG_DIR="$FLAGS" "$SD" adapt --bogus
+check "sd suggest rejects an unknown flag with exit 2" 2 env SIMPLEDIR_CONFIG_DIR="$FLAGS" "$SD" suggest --bogus
+check "sd top rejects --top with exit 2" 2 env SIMPLEDIR_CONFIG_DIR="$FLAGS" "$SD" top --top abc
+contains "and says which flags it takes" "try --json" env \
+  SIMPLEDIR_CONFIG_DIR="$FLAGS" "$SD" top --top abc
+for verb in suggest adapt; do
+  check "$verb rejects a bad --top" 2 env SIMPLEDIR_CONFIG_DIR="$FLAGS" "$SD" "$verb" --top abc
+  contains "$verb explains --top" "--top wants a positive number" env \
+    SIMPLEDIR_CONFIG_DIR="$FLAGS" "$SD" "$verb" --top abc
+done
+rm -rf "$FLAGS"
+
+MK=$(mktemp -d)
+check "make install creates a missing rc" 0 make -s -C "$ROOT" install \
+  PREFIX="$MK/bin" RC="$MK/.bashrc"
+check "make install wired the fresh rc" 0 grep -q '>>> simpledir >>>' "$MK/.bashrc"
+check "make install put the binaries in place" 0 "$MK/bin/sd" --version
+check "make uninstall removes the block" 0 make -s -C "$ROOT" uninstall \
+  PREFIX="$MK/bin" RC="$MK/.bashrc"
+check "make uninstall leaves no block" 0 bash -c \
+  "! grep -q '>>> simpledir >>>' '$MK/.bashrc'"
+rm -rf "$MK"
+
+# --- site and packaging stay honest ------------------------------------------
+# The command page is the discoverable index of both halves. Drive its coverage
+# from the same --help text that drives the dispatch assertions above, so a new
+# verb cannot ship in the binary and go missing from the website.
+docref=$(cat "$ROOT/docs/commands.html")
+for verb in $move_verbs $cfg_verbs; do
+  has "command docs mention $verb" "$verb" "$docref"
+done
+has "command docs carry sd --version" "--version" "$docref"
+has "command docs carry sd ls --long" "--long" "$docref"
+has "command docs carry --accept" "--accept N" "$docref"
+
+for page in "$ROOT"/docs/*.html; do
+  name=$(basename "$page")
+  foot=$(sed -n '/<div class="foot-end">/,/<\/nav>/p' "$page")
+  has "$name links zoxide from the footer" "zoxide.html" "$foot"
+  has "$name links the gallery from the footer" "gallery.html" "$foot"
+done
+
+about_page=$(cat "$ROOT/docs/about.html")
+has "the config example uses an alias object" '"aliases"</span>: {' "$about_page"
+lacks "the config example is not the old array" '"name"</span>: <span class="hi">"dots"' "$about_page"
+site_css=$(cat "$ROOT/docs/site.css")
+has "desktop nav waits until it fits" "min-width: 1200px" "$site_css"
+has "the mobile menu scrolls on short screens" "max-height: calc(100svh - 80px)" "$site_css"
+has "the floor bar shows total time" "width: 81%" "$site_css"
+site_js=$(cat "$ROOT/docs/site.js")
+install_page=$(cat "$ROOT/docs/install.html")
+has "copy has a live region" 'id="copy-status"' "$install_page"
+has "copy announces success" "install command copied" "$site_js"
+has "copy announces failure" "copy failed; select the command" "$site_js"
+has "manual install fetches the published sums" "releases/download/v13.0.0/SHA256SUMS" \
+  "$install_page"
+zoxide_page=$(cat "$ROOT/docs/zoxide.html")
+has "comparison rows are labelled" '<th scope="row"' "$zoxide_page"
+contributors_page=$(cat "$ROOT/docs/contributors.html")
+has "the network claim names jumps" "no network on a jump" "$contributors_page"
+lacks "and drops the false blanket claim" "read commands never touch the network" \
+  "$contributors_page"
+
+makefile_text=$(cat "$ROOT/Makefile")
+has "release refuses a dirty tree" "release needs a clean tree" "$makefile_text"
+workflow_text=$(cat "$ROOT/.github/workflows/verify.yml")
+has "tag audit sees every tag" "fetch-depth: 0" "$workflow_text"
+has "release assets are built on both arches" "ubuntu-24.04-arm" "$workflow_text"
+has "published bytes are checked against the sums" "sha256sum -c --strict SHA256SUMS" \
+  "$workflow_text"
+pkgbuild=$(cat "$ROOT/packaging/PKGBUILD")
+has "PKGBUILD enters the tag's own source dir" '$srcdir/$pkgname-$pkgver' "$pkgbuild"
+nix_readme=$(cat "$ROOT/packaging/nix/README.md")
+has "nix README makes the wrapper persist" "sdcfg init >> ~/.bashrc" "$nix_readme"
+contains "migrate help names v3" "v1/v2 to the current version (v3)" "$CFG" --help
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

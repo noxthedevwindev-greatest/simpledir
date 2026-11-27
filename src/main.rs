@@ -164,6 +164,16 @@ fn die(msg: impl Into<String>) -> AppError {
     user(msg)
 }
 
+// Only "no alias named ..." may fall through to frecency. An ambiguous prefix
+// or an alias whose directory is gone must say so, not silently jump to an
+// unrelated directory that happens to match the same word in the log.
+fn is_unknown_alias(err: &AppError) -> bool {
+    let msg = match err {
+        AppError::User(m) | AppError::Usage(m) => m,
+    };
+    msg.starts_with("no alias named '")
+}
+
 // --------------------------------------------------------------- program mode
 
 fn prog() -> &'static str {
@@ -263,8 +273,8 @@ usage: sdcfg <command> [arguments]
   to move, use sd: sd <alias>, sd ls, sd i, sd sha256, ...
   flags are long-form only: --force --dry-run --keep-symlinks --purge --yes
 
-  `migrate` moves your config file from version 1 to version 2. `update`
-  replaces the program itself. different things: neither calls the other.
+  `migrate` moves your config file from v1/v2 to the current version (v3).
+  `update` replaces the program itself. different things: neither calls the other.
 "#;
 
 // ------------------------------------------------------------------ strings
@@ -570,7 +580,22 @@ fn realpath(raw: &str) -> String {
 }
 
 fn as_stored(raw: &str) -> String {
-    abspath(raw)
+    // A config value has already had $VARS expanded at add/import time. Only a
+    // leading ~ is still symbolic, because exported configs use it to travel.
+    // Going through abspath() here re-expanded a literal $HOME in a directory
+    // name and reported a perfectly good path as missing.
+    let path = if raw == "~" {
+        home_dir()
+    } else if let Some(rest) = raw.strip_prefix("~/") {
+        home_dir() + "/" + rest
+    } else {
+        raw.to_string()
+    };
+    if path.starts_with('/') {
+        return lexically_normal(&path);
+    }
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    lexically_normal(&(cwd.to_string_lossy().to_string() + "/" + &path))
 }
 
 fn is_dir(path: &str) -> bool {
@@ -714,7 +739,12 @@ impl<'a> JsonParser<'a> {
 
     fn parse(mut self) -> Res<Json> {
         self.skip();
-        self.value()
+        let value = self.value()?;
+        self.skip();
+        if self.i != self.s.len() {
+            return self.fail("extra text after value");
+        }
+        Ok(value)
     }
 
     fn value(&mut self) -> Res<Json> {
@@ -813,57 +843,76 @@ impl<'a> JsonParser<'a> {
         let mut out = String::new();
         self.i += 1;
         while self.i < self.s.len() {
-            let c = self.s[self.i];
-            self.i += 1;
-            if c == b'"' {
+            let b = self.s[self.i];
+            if b == b'"' {
+                self.i += 1;
                 return Ok(out);
             }
-            if c != b'\\' {
-                out.push(c as char);
-                continue;
-            }
-            if self.i >= self.s.len() {
-                break;
-            }
-            let esc = self.s[self.i];
-            self.i += 1;
-            match esc {
-                b'n' => out.push('\n'),
-                b't' => out.push('\t'),
-                b'r' => out.push('\r'),
-                b'b' => out.push('\u{8}'),
-                b'f' => out.push('\u{c}'),
-                b'u' => {
-                    if self.i + 4 > self.s.len() {
-                        return self.fail("bad \\u escape");
-                    }
-                    let hex = std::str::from_utf8(&self.s[self.i..self.i + 4]).unwrap_or("");
-                    let mut code = u32::from_str_radix(hex, 16).unwrap_or(0);
-                    self.i += 4;
-                    if (0xD800..=0xDBFF).contains(&code)
-                        && self.i + 6 <= self.s.len()
-                        && self.s[self.i] == b'\\'
-                        && self.s[self.i + 1] == b'u'
-                    {
-                        let low_hex =
-                            std::str::from_utf8(&self.s[self.i + 2..self.i + 6]).unwrap_or("");
-                        let low = u32::from_str_radix(low_hex, 16).unwrap_or(0);
-                        if (0xDC00..=0xDFFF).contains(&low) {
-                            code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
-                            self.i += 6;
+            if b == b'\\' {
+                self.i += 1;
+                if self.i >= self.s.len() {
+                    break;
+                }
+                let esc = self.s[self.i];
+                self.i += 1;
+                match esc {
+                    b'n' => out.push('\n'),
+                    b't' => out.push('\t'),
+                    b'r' => out.push('\r'),
+                    b'b' => out.push('\u{8}'),
+                    b'f' => out.push('\u{c}'),
+                    b'u' => {
+                        if self.i + 4 > self.s.len()
+                            || !self.s[self.i..self.i + 4].iter().all(|c| c.is_ascii_hexdigit())
+                        {
+                            return self.fail("bad \\u escape");
+                        }
+                        let hex = std::str::from_utf8(&self.s[self.i..self.i + 4]).unwrap_or("");
+                        let mut code = u32::from_str_radix(hex, 16).unwrap_or(0);
+                        self.i += 4;
+                        if (0xD800..=0xDBFF).contains(&code)
+                            && self.i + 6 <= self.s.len()
+                            && self.s[self.i] == b'\\'
+                            && self.s[self.i + 1] == b'u'
+                            && self.s[self.i + 2..self.i + 6]
+                                .iter()
+                                .all(|c| c.is_ascii_hexdigit())
+                        {
+                            let low_hex =
+                                std::str::from_utf8(&self.s[self.i + 2..self.i + 6]).unwrap_or("");
+                            let low = u32::from_str_radix(low_hex, 16).unwrap_or(0);
+                            if (0xDC00..=0xDFFF).contains(&low) {
+                                code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                                self.i += 6;
+                            }
+                        }
+                        if let Some(ch) = char::from_u32(code) {
+                            out.push(ch);
+                        } else {
+                            // The C++ parser wrote the three UTF-8 bytes of a lone
+                            // surrogate directly. Rust strings cannot hold one, so
+                            // its replacement character is the closest faithful form.
+                            out.push('\u{FFFD}');
                         }
                     }
-                    if let Some(ch) = char::from_u32(code) {
-                        out.push(ch);
-                    } else {
-                        // The C++ parser wrote the three UTF-8 bytes of a lone
-                        // surrogate directly. Rust strings cannot hold one, so
-                        // its replacement character is the closest faithful form.
-                        out.push('\u{FFFD}');
-                    }
+                    other => out.push(other as char),
                 }
-                other => out.push(other as char),
+                continue;
             }
+            if b < 0x80 {
+                out.push(b as char);
+                self.i += 1;
+                continue;
+            }
+            // The input is a &str, so this is valid UTF-8. Copy one whole
+            // character rather than pushing its bytes as separate chars, which
+            // used to turn "café" into "cafÃ©" on every write.
+            let ch = std::str::from_utf8(&self.s[self.i..])
+                .ok()
+                .and_then(|s| s.chars().next())
+                .unwrap_or('\u{FFFD}');
+            out.push(ch);
+            self.i += ch.len_utf8();
         }
         self.fail("unterminated string")
     }
@@ -900,15 +949,17 @@ fn json_parse(text: &str) -> Res<Json> {
 
 fn json_escape(s: &str) -> String {
     let mut out = String::new();
-    for &c in s.as_bytes() {
+    for c in s.chars() {
         match c {
-            b'"' => out.push_str("\\\""),
-            b'\\' => out.push_str("\\\\"),
-            b'\n' => out.push_str("\\n"),
-            b'\t' => out.push_str("\\t"),
-            b'\r' => out.push_str("\\r"),
-            0..=0x1f => out.push_str(&format!("\\u{c:04x}")),
-            _ => out.push(c as char),
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            c if (c as u32) <= 0x1f => out.push_str(&format!("\\u{:04x}", c as u32)),
+            // Raw UTF-8 is legal inside a JSON string. Iterating bytes here
+            // used to encode every non-ASCII path twice on every save.
+            _ => out.push(c),
         }
     }
     out
@@ -1763,14 +1814,25 @@ fn run_move(argv: &[String]) -> Res<i32> {
             let allowed: BTreeSet<&str> = ["names", "json", "long"].into_iter().collect();
             for flag in args.flags.keys() {
                 if !allowed.contains(flag.as_str()) {
-                    return Err(user(format!(
-                        "unknown flag '--{flag}' for `sd ls`. try --long, --names, --json"
+                    return Err(usage(format!(
+                        "unknown flag '--{flag}' for `{MOVE} ls`. try --long, --names, --json"
                     )));
                 }
             }
             cmd_ls(&args)
         }
-        "top" => cmd_top(&parse_args(rest)?),
+        "top" => {
+            let args = parse_args(rest)?;
+            let allowed: BTreeSet<&str> = ["json"].into_iter().collect();
+            for flag in args.flags.keys() {
+                if !allowed.contains(flag.as_str()) {
+                    return Err(usage(format!(
+                        "unknown flag '--{flag}' for `{MOVE} top`. try --json"
+                    )));
+                }
+            }
+            cmd_top(&args)
+        }
         "recent" => {
             let args = parse_args(rest)?;
             let allowed: BTreeSet<&str> = ["json", "top"].into_iter().collect();
@@ -1812,8 +1874,8 @@ fn run_move(argv: &[String]) -> Res<i32> {
             let allowed: BTreeSet<&str> = ["json", "top"].into_iter().collect();
             for flag in args.flags.keys() {
                 if !allowed.contains(flag.as_str()) {
-                    return Err(user(format!(
-                        "unknown flag '--{flag}' for `sd suggest`. try --top, --json"
+                    return Err(usage(format!(
+                        "unknown flag '--{flag}' for `{MOVE} suggest`. try --top, --json"
                     )));
                 }
             }
@@ -2095,9 +2157,9 @@ fn jump(word: &str, cfg: &Config, now: f64) -> Res<String> {
     let mut target = String::new();
     match resolve(word, cfg) {
         Ok(found) => target = found,
-        Err(err) => {
-            // A directory you have actually been to is good enough when the
-            // name is unknown. Only the first existing hit wins.
+        // A directory you have actually been to is good enough when the name is
+        // unknown. Every other resolution error is real and must reach the user.
+        Err(err) if is_unknown_alias(&err) => {
             for hit in frecency_ranked(word, cfg, now) {
                 if is_dir(&hit.path) {
                     target = hit.path;
@@ -2108,6 +2170,7 @@ fn jump(word: &str, cfg: &Config, now: f64) -> Res<String> {
                 return Err(err); // rethrow the real error
             }
         }
+        Err(err) => return Err(err),
     }
     if history_enabled(cfg) {
         record_visit(&target, now);
@@ -2874,10 +2937,7 @@ fn history_candidates(limit: i32) -> Res<Vec<Candidate>> {
 
 fn cmd_suggest(args: &Args) -> Res<i32> {
     let cfg = load_config()?;
-    let mut limit: i32 = 10;
-    if args.saw("top") {
-        limit = args.value("top").parse::<i32>().unwrap_or(0);
-    }
+    let limit = parse_limit(args, 10)?;
     let candidates = history_candidates(limit)?;
 
     if candidates.is_empty() {
@@ -2926,10 +2986,7 @@ fn cmd_suggest(args: &Args) -> Res<i32> {
 // `sd adapt` is the read-only half: it says what it wants to learn and never
 // writes a verdict. `sdcfg adapt` owns the writing.
 fn cmd_adapt(args: &Args) -> Res<i32> {
-    let mut limit: i32 = 10;
-    if args.saw("top") {
-        limit = args.value("top").parse::<i32>().unwrap_or(0);
-    }
+    let limit = parse_limit(args, 10)?;
     let found = adapt_proposals(limit, args.has("all"))?;
 
     if found.is_empty() {
@@ -3249,6 +3306,23 @@ fn releases(limit: i32) -> Res<Vec<(String, String, String)>> {
     Ok(found)
 }
 
+// `update` only ever moves between stable releases. GitHub's first release can
+// be a prerelease, so the list has to be filtered rather than trusted in order;
+// `sdcfg releases` deliberately shows everything.
+fn stable_release_tag(tag: &str) -> bool {
+    let rest = match tag.strip_prefix('v') {
+        Some(r) => r,
+        None => return false,
+    };
+    let mut parts = rest.split('.');
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some(a), Some(b), Some(c), None) => {
+            [a, b, c].iter().all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+        }
+        _ => false,
+    }
+}
+
 // A tag has to look like a tag. vX.Y.Z with an optional prerelease suffix,
 // lowercase letters only, no leading zeros in a numeric component. Saying it
 // here beats a 404 that doesn't explain what went wrong.
@@ -3395,9 +3469,16 @@ fn nw_sha256_hex(data: &[u8]) -> String {
     result
 }
 
-// The sha256 a sums file publishes for `name`, or "" when it doesn't list it.
-// Format is sha256sum output: "<64 hex>  <name>", two spaces, names bare.
-fn published_sum(sums: &str, name: &str) -> String {
+// The sha256 a sums file publishes for `name`. Format is sha256sum output:
+// "<64 hex>  <name>", two spaces, names bare. "Missing" and "malformed" must
+// stay different: an absent sum warns, a listed-but-bogus one is tampering.
+enum SumLookup {
+    Missing,
+    Listed(String),
+    Malformed,
+}
+
+fn published_sum(sums: &str, name: &str) -> SumLookup {
     for line in sums.lines() {
         let mut line = line.to_string();
         while line.ends_with('\r') || line.ends_with(' ') {
@@ -3418,12 +3499,12 @@ fn published_sum(sums: &str, name: &str) -> String {
         if listed != name {
             continue;
         }
-        if !digest.bytes().all(|c| c.is_ascii_hexdigit()) || digest.len() != 64 {
-            return String::new();
+        if digest.len() != 64 || !digest.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return SumLookup::Malformed;
         }
-        return digest.to_lowercase();
+        return SumLookup::Listed(digest.to_lowercase());
     }
-    String::new()
+    SumLookup::Missing
 }
 
 // Where the SHA256SUMS for a release lives. `latest` is a redirect like the
@@ -3543,13 +3624,24 @@ fn install_release(tag: &str, allow_older: bool) -> Res<i32> {
     if !from_source {
         let sums_staged = format!("{staged}.sums");
         let have_sums = download(&nw_sums_url_for(&base, tag), &sums_staged);
-        let listed = if have_sums {
+        let lookup = if have_sums {
             published_sum(&read_file(&sums_staged)?, &asset_name())
         } else {
-            String::new()
+            SumLookup::Missing
         };
         let _ = fs::remove_file(&sums_staged);
-        if !listed.is_empty() {
+        let listed = match lookup {
+            SumLookup::Listed(sum) => Some(sum),
+            SumLookup::Missing => None,
+            SumLookup::Malformed => {
+                let _ = fs::remove_file(&staged);
+                return Err(die(format!(
+                    "the published SHA256SUMS has a malformed checksum for {}.\n  nothing was run or replaced. a listed-but-broken digest is not the same as\n  an old release with no checksum at all. try another mirror, or build the source:\n    {CONFIG} update --to {tag}",
+                    asset_name()
+                )));
+            }
+        };
+        if let Some(listed) = listed {
             // The staged file is a binary: fs::read, not read_to_string.
             let bytes = fs::read(&staged)
                 .map_err(|e| user(format!("can't read {staged}: {e}")))?;
@@ -3625,7 +3717,16 @@ fn install_release(tag: &str, allow_older: bool) -> Res<i32> {
     }
 
     if path_exists(&target) {
-        let _ = fs::copy(&target, &(target.clone() + ".previous"));
+        // Keep the way back atomic too. A crash mid-copy used to leave a
+        // half-written .previous, which is the one file a downgrade needs.
+        let previous = target.clone() + ".previous";
+        let backup_stage = format!("{previous}.new.{}", unsafe { getpid() });
+        if fs::copy(&target, &backup_stage).is_ok() {
+            let _ = fs::set_permissions(&backup_stage, fs::Permissions::from_mode(0o755));
+            let _ = fs::rename(&backup_stage, &previous);
+        } else {
+            let _ = fs::remove_file(&backup_stage);
+        }
     }
     if let Err(e) = fs::rename(&staged, &target) {
         let _ = fs::remove_file(&staged);
@@ -3673,13 +3774,20 @@ fn cmd_update(args: &Args) -> Res<i32> {
         return Ok(0);
     }
 
-    let found = releases(1)?;
+    let found = releases(30)?;
     if found.is_empty() {
         return Err(die(format!(
             "couldn't reach GitHub to check for updates.\n  the unauthenticated api allows 60 requests an hour per address; wait, or\n  install a version directly: {CONFIG} update --to v6.0.0\n  releases are also listed at {REPO}/releases"
         )));
     }
-    let latest = &found[0].0;
+    let latest = match found.iter().find(|r| stable_release_tag(&r.0)) {
+        Some(r) => r.0.clone(),
+        None => {
+            return Err(die(format!(
+                "there are published releases, but none is a stable vX.Y.Z.\n  update never installs a prerelease. list them with: {CONFIG} releases"
+            )));
+        }
+    };
     out(&format!(
         "{CONFIG} {VERSION} installed, newest release is {latest}\n"
     ));
@@ -3716,7 +3824,7 @@ fn cmd_update(args: &Args) -> Res<i32> {
             }
         }
     }
-    let installed = install_release(latest, false)?;
+    let installed = install_release(&latest, false)?;
     if installed != 0 {
         let short = latest.get(1..).unwrap_or("");
         out(&format!("updated to {short} at {target}\n"));
@@ -3765,16 +3873,18 @@ fn cmd_revert(args: &Args) -> Res<i32> {
         return Ok(0);
     }
 
-    let swapped = format!("{target}.swapping.{}", unsafe { getpid() });
-    if path_exists(&target) {
-        let _ = fs::rename(&target, &swapped);
-    }
-    if let Err(e) = fs::copy(&previous, &target) {
-        let _ = fs::rename(&swapped, &target);
+    // Stage the copied bytes beside the target, make them executable, then
+    // rename. Copying straight over the running binary was neither atomic nor
+    // mode-preserving: a revert left 0744 and a crash left a truncated sd.
+    let restore = format!("{target}.revert.{}", unsafe { getpid() });
+    if let Err(e) = fs::copy(&previous, &restore) {
         return Err(die(format!("couldn't put the old version back: {e}")));
     }
-    let _ = fs::set_permissions(&target, fs::Permissions::from_mode(0o744));
-    let _ = fs::remove_file(&swapped);
+    let _ = fs::set_permissions(&restore, fs::Permissions::from_mode(0o755));
+    if let Err(e) = fs::rename(&restore, &target) {
+        let _ = fs::remove_file(&restore);
+        return Err(die(format!("couldn't put the old version back: {e}")));
+    }
     out(&format!("back to {reported}, installed at {target}\n"));
     out(&format!(
         "  (it was {VERSION}. new shell needed if {MOVE} gained subcommands)\n"
@@ -3867,14 +3977,17 @@ fn nudge() {
         }
     }
     if latest.is_empty() || now_seconds() - checked > 86400.0 {
-        let found = match releases(1) {
+        let found = match releases(30) {
             Ok(f) => f,
             Err(_) => return,
         };
         if found.is_empty() {
             return; // offline, rate limited, api changed: say nothing
         }
-        latest = found[0].0.clone();
+        latest = match found.iter().find(|r| stable_release_tag(&r.0)) {
+            Some(r) => r.0.clone(),
+            None => return, // only prereleases: don't nudge toward half-finished work
+        };
         nw_write_update_cache(&latest);
     }
     if latest.is_empty() {
@@ -4527,13 +4640,13 @@ where
     }
 }
 
-fn cb_floor_command() -> Command {
-    // The floor is "any process at all", a shell `true` fork, not this program
-    // doing work. Both streams go to /dev/null so an undrained pipe is not
-    // what we end up timing.
-    let mut c = Command::new("true");
-    c.stdout(Stdio::null()).stderr(Stdio::null());
-    c
+fn cb_floor_command(self_path: &str) -> Command {
+    // The floor is this binary doing no work, not some other process with a
+    // different linker and startup path. It is the only honest baseline for
+    // the "over startup" column. Both streams go to /dev/null so an undrained
+    // pipe is not what we end up timing.
+    let words = vec!["--version".to_string()];
+    cb_self_command(self_path, &words)
 }
 
 fn cb_self_command(self_path: &str, words: &[String]) -> Command {
@@ -4586,8 +4699,8 @@ fn cmd_bench(args: &Args) -> Res<i32> {
 
     // Measured twice, before and after the cases; keep the faster median.
     // Measuring only at the start used to absorb the cold page cache and made
-    // a jump look cheaper than starting any process at all.
-    let mut floor = cb_measure(cb_floor_command, runs as usize);
+    // a jump look cheaper than this binary doing no work at all.
+    let mut floor = cb_measure(|| cb_floor_command(&self_path), runs as usize);
 
     let mut cases: Vec<CbCase> = Vec::new();
     if let Some(ref c) = cfg {
@@ -4622,6 +4735,20 @@ fn cmd_bench(args: &Args) -> Res<i32> {
         note: "every check it can do".to_string(),
     });
 
+    // Measure every case before printing anything, then measure the floor a
+    // second time. Both the table and the paragraph below must use the same
+    // faster floor: printing the table first used to leave it on the cold
+    // first measurement while the paragraph used the faster second one.
+    let mut measured: Vec<(CbCase, CbTiming)> = Vec::with_capacity(cases.len());
+    for case in cases {
+        let t = cb_measure(|| cb_self_command(&self_path, &case.words), runs as usize);
+        measured.push((case, t));
+    }
+    let floor_again = cb_measure(|| cb_floor_command(&self_path), runs as usize);
+    if floor_again.median < floor.median {
+        floor = floor_again;
+    }
+
     out(&format!(
         "  {:<18} {:>10} {:>13} {:>11}   {}\n",
         "case", "median", "over startup", "best", ""
@@ -4630,16 +4757,15 @@ fn cmd_bench(args: &Args) -> Res<i32> {
 
     // --version does no work at all, so it is both the floor and a row of its own.
     out(&format!(
-        "  {:<18} {:>7.3} ms {:>13} {:>7.3} ms   any process at all\n",
-        "process startup",
+        "  {:<18} {:>7.3} ms {:>13} {:>7.3} ms   this binary, no work\n",
+        format!("{MOVE} --version"),
         floor.median / 1000.0,
         "--",
         floor.best / 1000.0
     ));
 
     let mut jump_over_floor = 0.0;
-    for (i, case) in cases.iter().enumerate() {
-        let t = cb_measure(|| cb_self_command(&self_path, &case.words), runs as usize);
+    for (i, (case, t)) in measured.iter().enumerate() {
         if i == 0 {
             jump_over_floor = (t.median - floor.median) / 1000.0;
         }
@@ -4653,15 +4779,10 @@ fn cmd_bench(args: &Args) -> Res<i32> {
         ));
     }
 
-    let floor_again = cb_measure(cb_floor_command, runs as usize);
-    if floor_again.median < floor.median {
-        floor = floor_again;
-    }
-
     // Say the thing the table is actually saying, so a table of milliseconds
     // does not invite the reading that this program is slow.
     out(&format!(
-        "\n  starting any process here costs {:.3} ms, before this program does\n  anything at all. a jump costs {:.3} ms more than that: read the config, find\n  the name, check the directory still exists, print the path. The frecency\n  log is not searched on a jump -- recording a visit only needs one\n  timestamp out of it, which is a substring scan rather than a parse.\n",
+        "\n  starting this binary with --version costs {:.3} ms, before it does any work\n  at all. a jump costs {:.3} ms more than that: read the config, find the\n  name, check the directory still exists, print the path. The frecency log is\n  not searched on a jump -- recording a visit only needs one timestamp out\n  of it, which is a substring scan rather than a parse.\n",
         floor.median / 1000.0,
         jump_over_floor
     ));

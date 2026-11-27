@@ -308,7 +308,7 @@ Otherwise candidates are guessed from `$SHELL` plus `~/.bashrc`, `~/.zshrc` and
 
 ```
 make        # one rustc invocation over one file, static libc when available
-make test   # 711 assertions against the compiled binary, no network
+make test   # 830 assertions against the compiled binary, no network
 make assets # dist/ (binary, main.rs, install.sh, SHA256SUMS, mode 755)
 make release
 ```
